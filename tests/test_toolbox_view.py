@@ -72,6 +72,45 @@ class ScanIdentifierTests(unittest.TestCase):
             },
         )
 
+    def test_extracts_t_format_category_and_identifier(self):
+        category_ids = extract_ng_defect_category_ids([
+            "T-NO-A165-20261108-Result=NG_mark.png",
+            "T-NO-A165-20261108-Result=NG_mark.jpg",
+            "T-OK-B200-20261107.png",
+        ])
+
+        self.assertEqual(
+            category_ids,
+            {
+                ("NO", "A"): {"165"},
+                ("OK", "B"): {"200"},
+            },
+        )
+
+    def test_t_format_without_side_prefix_extracts_first_number(self):
+        category_ids = extract_ng_defect_category_ids([
+            "T-UNKNOWN-12345-20261108.png",
+        ])
+
+        self.assertEqual(
+            category_ids,
+            {
+                ("UNKNOWN", "未分类"): {"12345"},
+            },
+        )
+
+    def test_t_format_with_underscore_separator(self):
+        category_ids = extract_ng_defect_category_ids([
+            "T_NO_A001_20261108.png",
+        ])
+
+        self.assertEqual(
+            category_ids,
+            {
+                ("NO", "A"): {"1"},
+            },
+        )
+
     def test_finds_matching_images_recursively_without_partial_number_matches(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -1,8 +1,11 @@
-﻿﻿import sys
+import sys
 import hashlib
 import html
+import json
 import os
 import re
+import shutil
+import uuid
 import datetime as dt
 from pathlib import Path
 
@@ -15,10 +18,11 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QTextEdit, QFileDialog, QMessageBox, QGroupBox, QComboBox,
     QFormLayout, QDateEdit, QDateTimeEdit, QAbstractSpinBox, QProgressBar, QTabWidget, QFrame,
-    QSplitter, QListWidget, QListWidgetItem
+    QSplitter, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
+    QHeaderView, QSpinBox, QCheckBox, QAbstractItemView, QStatusBar, QInputDialog
 )
 from PySide6.QtCore import Qt, QDate, QDateTime, QTime, QSettings, QUrl, QMimeData
-from PySide6.QtGui import QDesktopServices, QPixmap, QFont, QGuiApplication
+from PySide6.QtGui import QDesktopServices, QPixmap, QFont, QGuiApplication, QColor
 
 from app.config import SERVER_URL
 from app.services.async_bridge import run_in_background
@@ -26,12 +30,60 @@ from app.ui.image_viewer import DraggableImageView
 
 NG_FOLDER_SETTINGS_KEY = "toolbox/ng_stats/last_folder"
 IMAGE_SEARCH_FOLDER_SETTINGS_KEY = "toolbox/image_search/last_folder"
+IMAGE_EXPORT_FOLDER_SETTINGS_KEY = "toolbox/image_search/last_export_dir"
+TASK_PERSON_SETTINGS_KEY = "toolbox/task/current_person"
 DEFAULT_NG_FOLDER = r"D:\判定结果"
 DEFAULT_IMAGE_SEARCH_FOLDER = r"D:\判定结果"
 IMAGE_EXTENSIONS = {".avif", ".bmp", ".gif", ".heic", ".heif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 
+TASK_STATUS_TODO = "todo"
+TASK_STATUS_DOING = "doing"
+TASK_STATUS_DONE = "done"
+TASK_STATUS_BLOCKED = "blocked"
+TASK_STATUS_LABELS = {
+    TASK_STATUS_TODO: "待办",
+    TASK_STATUS_DOING: "进行中",
+    TASK_STATUS_DONE: "已完成",
+    TASK_STATUS_BLOCKED: "已搁置",
+}
+TASK_STATUS_COLORS = {
+    TASK_STATUS_TODO: "#909399",
+    TASK_STATUS_DOING: "#e6a23c",
+    TASK_STATUS_DONE: "#67c23a",
+    TASK_STATUS_BLOCKED: "#f56c6c",
+}
+
+
+def _tasks_data_path() -> Path:
+    appdata = os.environ.get("APPDATA") or str(Path.home() / ".config")
+    d = Path(appdata) / "PythonToolbox"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "tasks.json"
+
+
+def _load_tasks_data() -> dict:
+    p = _tasks_data_path()
+    if not p.exists():
+        return {}
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_tasks_data(data: dict) -> None:
+    p = _tasks_data_path()
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
 
 Y_PATTERN = re.compile(r"[Y]-(\d+)-(\d+)-?([AB])(?=-|\.|$)", re.IGNORECASE)
+T_PATTERN = re.compile(r"^T[-_]+([^-_]+)", re.IGNORECASE)
+T_SIDE_NUMBER_PATTERN = re.compile(r"([AB高低侧])\s*(\d+)", re.IGNORECASE)
+_DATE8_RE = re.compile(r"20\d{6}")
+_SIDE_NUMBER_RE = re.compile(r"[高低侧ABC]\s*(\d+)", re.IGNORECASE)
+_STANDALONE_NUMBER_RE = re.compile(r"(?<![A-Za-z\d])(\d{1,5})(?!\d)")
 
 
 def extract_unique_scan_ids(text: str) -> list[str]:
@@ -47,6 +99,22 @@ def extract_unique_scan_ids(text: str) -> list[str]:
 def extract_ng_defect_category_ids(filenames: list[str]) -> dict[tuple[str, str], set[str]]:
     category_ids: dict[tuple[str, str], set[str]] = {}
     for filename in filenames:
+        t_match = T_PATTERN.match(filename)
+        if t_match:
+            batch = t_match.group(1)
+            stem = os.path.splitext(filename)[0]
+            side_num = T_SIDE_NUMBER_PATTERN.search(stem)
+            if side_num:
+                pid = str(int(side_num.group(2)))
+                category = side_num.group(1).upper()
+            else:
+                num_match = re.search(r"(\d+)", stem)
+                if not num_match:
+                    continue
+                pid = str(int(num_match.group(1)))
+                category = "未分类"
+            category_ids.setdefault((batch, category), set()).add(pid)
+            continue
         y_match = Y_PATTERN.search(filename)
         if y_match:
             batch = y_match.group(1)
@@ -87,6 +155,10 @@ def find_images_by_identifier(folder_path: str, identifier: str) -> list[Path]:
         rf"Y-\d+-0*{re.escape(normalized_identifier)}-?[AB](?=-|\.|$)",
         re.IGNORECASE,
     )
+    t_pattern = re.compile(
+        rf"T[-_][^-_]+[-_](?:[AB高低侧]\s*)?0*{re.escape(normalized_identifier)}(?=[-_]|\.|$)",
+        re.IGNORECASE,
+    )
     matches = []
 
     def raise_walk_error(error):
@@ -100,6 +172,9 @@ def find_images_by_identifier(folder_path: str, identifier: str) -> list[Path]:
             stem = path.stem
             if Y_PATTERN.search(stem):
                 if y_pattern.search(stem):
+                    matches.append(path)
+            elif T_PATTERN.match(stem):
+                if t_pattern.search(stem):
                     matches.append(path)
             else:
                 if old_pattern.search(stem):
@@ -187,6 +262,7 @@ class ToolboxView(QWidget):
         self._build_identifier_tab(tabs)
         self._build_image_search_tab(tabs)
         self._build_ng_stats_tab(tabs)
+        self._build_task_tab(tabs)
 
         layout.addWidget(tabs)
 
@@ -737,33 +813,94 @@ class ToolboxView(QWidget):
 
         search_row = QHBoxLayout()
         search_row.setSpacing(8)
-        self.image_search_number = QLineEdit()
-        self.image_search_number.setPlaceholderText("请输入编号，例如 10055")
-        self.image_search_number.returnPressed.connect(self._search_images)
-        search_row.addWidget(self.image_search_number)
+        self.image_search_number = QTextEdit()
+        self.image_search_number.setPlaceholderText(
+            "输入编号，支持批量（空格/换行/逗号分隔）\n"
+            "例如：10055 10056 10057\n"
+            "或：10055, 10056, 10057"
+        )
+        self.image_search_number.setFixedHeight(80)
+        self.image_search_number.setStyleSheet(
+            "QTextEdit { font-size: 13px; border: 1px solid #ddd; border-radius: 4px; padding: 6px; }"
+        )
+        search_row.addWidget(self.image_search_number, 1)
 
-        search_button = QPushButton("查询图片")
+        btn_col = QVBoxLayout()
+        btn_col.setSpacing(4)
+        search_button = QPushButton("批量查询图片")
         search_button.setStyleSheet(
             "QPushButton { background-color: #2f4b7c; color: white; padding: 6px 16px; "
             "border-radius: 4px; }"
             "QPushButton:hover { background-color: #3d5f99; }"
         )
         search_button.clicked.connect(self._search_images)
-        search_row.addWidget(search_button)
+        btn_col.addWidget(search_button)
 
+        select_export_btn = QPushButton("选择导出文件夹")
+        select_export_btn.setStyleSheet(
+            "QPushButton { background-color: #388e3c; color: white; padding: 6px 16px; "
+            "border-radius: 4px; }"
+            "QPushButton:hover { background-color: #4caf50; }"
+        )
+        select_export_btn.clicked.connect(self._select_export_folder)
+        btn_col.addWidget(select_export_btn)
+
+        self.export_path_label = QLabel("尚未选择导出文件夹")
+        self.export_path_label.setStyleSheet(
+            "color: #606266; font-size: 11px; padding: 2px 4px; "
+            "background: #f5f5f5; border-radius: 3px;"
+        )
+        self.export_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.export_path_label.setCursor(Qt.IBeamCursor)
+        self.export_path_label.setWordWrap(True)
+        self.export_path_label.setMinimumWidth(260)
+        btn_col.addWidget(self.export_path_label)
+
+        self.export_button = QPushButton("导出图片")
+        self.export_button.setEnabled(False)
+        self.export_button.setStyleSheet(
+            "QPushButton { background-color: #1976d2; color: white; padding: 6px 16px; "
+            "border-radius: 4px; }"
+            "QPushButton:hover { background-color: #1e88e5; }"
+            "QPushButton:disabled { background-color: #ccc; color: #fff; }"
+        )
+        self.export_button.clicked.connect(self._export_search_images)
+        btn_col.addWidget(self.export_button)
+
+        btn_col_widget = QWidget()
+        btn_col_widget.setLayout(btn_col)
+        search_row.addWidget(btn_col_widget)
+        tab_layout.addLayout(search_row)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
         clear_button = QPushButton("清空")
         clear_button.clicked.connect(self._clear_image_search)
-        search_row.addWidget(clear_button)
+        action_row.addWidget(clear_button)
 
-        self.copy_images_button = QPushButton("复制全部图片")
+        self.copy_images_button = QPushButton("复制全部图片到剪贴板")
         self.copy_images_button.setEnabled(False)
         self.copy_images_button.clicked.connect(self._copy_all_search_images)
-        search_row.addWidget(self.copy_images_button)
-        tab_layout.addLayout(search_row)
+        action_row.addWidget(self.copy_images_button)
+        action_row.addStretch()
+        tab_layout.addLayout(action_row)
 
         self.image_search_result_count = QLabel("")
         self.image_search_result_count.setStyleSheet("color: #606266; font-size: 12px;")
+        self.image_search_result_count.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.image_search_result_count.setCursor(Qt.IBeamCursor)
         tab_layout.addWidget(self.image_search_result_count)
+
+        self.copy_not_found_button = QPushButton("复制未找到编号")
+        self.copy_not_found_button.setEnabled(False)
+        self.copy_not_found_button.setStyleSheet(
+            "QPushButton { background-color: #e53935; color: white; padding: 4px 12px; "
+            "border-radius: 4px; font-size: 12px; }"
+            "QPushButton:hover { background-color: #c62828; }"
+            "QPushButton:disabled { background-color: #ccc; color: #fff; }"
+        )
+        self.copy_not_found_button.clicked.connect(self._copy_not_found_identifiers)
+        action_row.addWidget(self.copy_not_found_button)
 
         results_splitter = QSplitter(Qt.Horizontal)
         self.image_search_results = QListWidget()
@@ -791,6 +928,17 @@ class ToolboxView(QWidget):
         if self.image_search_folder:
             self.image_search_folder_label.setText(self.image_search_folder)
 
+        previous_export = settings.value(IMAGE_EXPORT_FOLDER_SETTINGS_KEY, "", type=str)
+        if previous_export and os.path.isdir(previous_export):
+            self._export_parent_dir = previous_export
+            self.export_path_label.setText(f"📁 {previous_export}")
+            self.export_path_label.setStyleSheet(
+                "color: #388e3c; font-size: 11px; padding: 2px 4px; "
+                "background: #e8f5e9; border-radius: 3px;"
+            )
+        else:
+            self._export_parent_dir = ""
+
         tabs.addTab(tab, "图片编号查询")
 
     def _select_image_search_folder(self):
@@ -808,35 +956,112 @@ class ToolboxView(QWidget):
         self.image_search_folder_label.setText(folder_path)
         self.image_search_results.clear()
         self.copy_images_button.setEnabled(False)
+        self.copy_not_found_button.setEnabled(False)
         self.image_search_result_count.clear()
         self.image_search_preview.setText("输入编号后查询图片")
+        self._current_search_matches = []
+        self._not_found_identifiers = []
+
+    def _parse_batch_identifiers(self, text: str) -> list[str]:
+        raw = re.split(r"[\s,，;；]+", text.strip())
+        seen = set()
+        result = []
+        for item in raw:
+            item = item.strip()
+            if not item:
+                continue
+            if not item.isdigit():
+                continue
+            if item in seen:
+                continue
+            seen.add(item)
+            result.append(item)
+        return result
 
     def _search_images(self):
         folder_path = getattr(self, "image_search_folder", "")
-        identifier = self.image_search_number.text().strip()
+        raw_text = self.image_search_number.toPlainText()
         if not folder_path:
             QMessageBox.warning(self, "提示", "请先选择图片文件夹")
             return
-        if not identifier.isdigit():
-            QMessageBox.warning(self, "提示", "请输入有效的数字编号")
+        identifiers = self._parse_batch_identifiers(raw_text)
+        if not identifiers:
+            QMessageBox.warning(
+                self, "提示",
+                "请输入有效的数字编号（支持空格/换行/逗号分隔批量输入）"
+            )
             return
 
-        try:
-            matches = find_images_by_identifier(folder_path, identifier)
-        except OSError as exc:
-            QMessageBox.critical(self, "读取失败", f"扫描图片文件夹失败：{exc}")
-            return
+        all_matches: list[Path] = []
+        seen_paths: set[str] = set()
+        path_to_identifier: dict[str, str] = {}
+        ng_identifiers: set[str] = set()
+        ng_file_paths: list[Path] = []
+        errors = []
+        found_identifiers: set[str] = set()
+        for identifier in identifiers:
+            try:
+                matches = find_images_by_identifier(folder_path, identifier)
+            except OSError as exc:
+                errors.append(f"编号 {identifier} 扫描失败: {exc}")
+                continue
+            if matches:
+                found_identifiers.add(identifier)
+                id_all_ng = all(self._is_ng_path(p, folder_path) for p in matches)
+                if id_all_ng:
+                    ng_identifiers.add(identifier)
+            for p in matches:
+                key = str(p).lower()
+                if key not in seen_paths:
+                    seen_paths.add(key)
+                    all_matches.append(p)
+                    path_to_identifier[key] = identifier
+                    if self._is_ng_path(p, folder_path):
+                        ng_file_paths.append(p)
+
+        not_found = [i for i in identifiers if i not in found_identifiers]
 
         self.image_search_results.clear()
         self.image_search_preview.setText("请从左侧选择图片预览")
-        self.image_search_result_count.setText(f"找到 {len(matches)} 张匹配图片")
-        self.copy_images_button.setEnabled(bool(matches))
-        for path in matches:
+        if len(identifiers) == 1:
+            count_text = f"编号 {identifiers[0]}：找到 {len(all_matches)} 张匹配图片"
+        else:
+            count_text = f"共 {len(identifiers)} 个编号，找到 {len(all_matches)} 张匹配图片（已去重）"
+        if not_found:
+            count_text += f"　未查到 {len(not_found)} 个：{' '.join(not_found)}"
+        if errors:
+            count_text += f"　⚠ {len(errors)} 个失败"
+        if ng_file_paths:
+            ng_names = sorted({html.escape(p.name) for p in ng_file_paths})
+            count_text += (
+                f'<br><span style="color:#c62828;font-weight:600;">⚠ NG 图片 '
+                f'（{len(ng_file_paths)} 张 / 编号 {" ".join(sorted(ng_identifiers, key=int))}）'
+                f'</span>'
+            )
+            count_text += f'<br><span style="color:#b71c1c;font-size:11px;">{"  ".join(ng_names[:20])}'
+            if len(ng_names) > 20:
+                count_text += f'　…等 {len(ng_names)} 个文件名'
+            count_text += '</span>'
+        self.image_search_result_count.setText(count_text)
+        self.image_search_result_count.setTextFormat(Qt.RichText)
+        self.copy_images_button.setEnabled(bool(all_matches))
+        self.export_button.setEnabled(bool(all_matches) and bool(getattr(self, "_export_parent_dir", "")))
+        self._not_found_identifiers = not_found
+        self.copy_not_found_button.setEnabled(bool(not_found))
+
+        self._current_search_matches = all_matches
+
+        for path in all_matches:
+            path_str = str(path)
+            key = path_str.lower()
+            identifier = path_to_identifier.get(key, "")
+            highlighted = highlight_identifier_in_filename(path_str, identifier) if identifier else html.escape(path_str)
+            prefix = f'<span style="display:inline-block;background:#1a56db;color:white;border-radius:3px;padding:1px 6px;margin-right:6px;font-size:11px;">#{identifier}</span>' if identifier else ""
             item = QListWidgetItem()
-            item.setData(Qt.UserRole, str(path))
-            item.setToolTip(str(path))
+            item.setData(Qt.UserRole, path_str)
+            item.setToolTip(path_str)
             self.image_search_results.addItem(item)
-            label = QLabel(highlight_identifier_in_filename(str(path), identifier))
+            label = QLabel(f'<div>{prefix}{highlighted}</div>')
             label.setTextFormat(Qt.RichText)
             label.setAttribute(Qt.WA_TransparentForMouseEvents)
             label.setMinimumWidth(460)
@@ -845,6 +1070,84 @@ class ToolboxView(QWidget):
             )
             item.setSizeHint(label.sizeHint())
             self.image_search_results.setItemWidget(item, label)
+
+    def _select_export_folder(self):
+        settings = QSettings("ProductionManagement", "Client")
+        initial_dir = settings.value(IMAGE_EXPORT_FOLDER_SETTINGS_KEY, "", type=str) or ""
+        parent_dir = QFileDialog.getExistingDirectory(
+            self, "选择导出根目录（将自动创建 产品名/日期时分 子文件夹）", initial_dir
+        )
+        if not parent_dir:
+            return
+        settings.setValue(IMAGE_EXPORT_FOLDER_SETTINGS_KEY, parent_dir)
+        self._export_parent_dir = parent_dir
+        self.export_path_label.setText(f"📁 {parent_dir}")
+        self.export_path_label.setStyleSheet(
+            "color: #388e3c; font-size: 11px; padding: 2px 4px; "
+            "background: #e8f5e9; border-radius: 3px;"
+        )
+        has_matches = bool(getattr(self, "_current_search_matches", []))
+        self.export_button.setEnabled(has_matches)
+
+    def _export_search_images(self):
+        matches = getattr(self, "_current_search_matches", [])
+        if not matches:
+            QMessageBox.warning(self, "提示", "请先执行图片查询")
+            return
+
+        parent_dir = getattr(self, "_export_parent_dir", "")
+        if not parent_dir or not os.path.isdir(parent_dir):
+            QMessageBox.warning(self, "提示", "请先选择导出文件夹")
+            return
+
+        now_str = dt.datetime.now().strftime("%Y%m%d_%H%M")
+        search_root = Path(getattr(self, "image_search_folder", ""))
+        product_name = self._extract_product_name(str(search_root)) if search_root else "未命名"
+        target_dir = Path(parent_dir) / product_name / now_str
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(self, "创建失败", f"无法创建目录：{target_dir}\n{exc}")
+            return
+
+        copied = 0
+        skipped = 0
+        errors = []
+        root = search_root
+        for src in matches:
+            try:
+                rel = src.relative_to(root) if root and src.is_relative_to(root) else Path(src.name)
+            except ValueError:
+                rel = Path(src.name)
+            dst = target_dir / rel
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                copied += 1
+            except OSError as exc:
+                if os.path.exists(dst):
+                    skipped += 1
+                else:
+                    errors.append(f"{rel}: {exc}")
+
+        msg_lines = [
+            f"导出完成！",
+            f"产品：{product_name}",
+            f"时间：{now_str}",
+            f"完整路径：{target_dir}",
+            f"",
+            f"成功复制：{copied} 个",
+            f"跳过已存在：{skipped} 个",
+            f"总数：{len(matches)} 个",
+        ]
+        if errors:
+            msg_lines.append(f"失败：{len(errors)} 个")
+            msg_lines.append("\n".join(errors[:5]))
+            if len(errors) > 5:
+                msg_lines.append(f"... 等 {len(errors)} 个错误")
+
+        self.export_path_label.setText(f"✅ {target_dir}　(成功 {copied} / 跳过 {skipped})")
+        QMessageBox.information(self, "导出完成", "\n".join(msg_lines))
 
     def _copy_all_search_images(self):
         image_paths = [
@@ -889,14 +1192,34 @@ class ToolboxView(QWidget):
         if not image_path or not QDesktopServices.openUrl(QUrl.fromLocalFile(image_path)):
             QMessageBox.warning(self, "打开失败", "无法使用系统默认图片查看器打开该图片。")
 
+    def _copy_not_found_identifiers(self):
+        not_found = getattr(self, "_not_found_identifiers", [])
+        if not not_found:
+            QMessageBox.information(self, "提示", "当前没有未找到的编号")
+            return
+        text = " ".join(not_found)
+        QGuiApplication.clipboard().setText(text)
+        self.copy_not_found_button.setText("已复制 ✓")
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(1500, lambda: self.copy_not_found_button.setText("复制未找到编号"))
+
     def _clear_image_search(self):
         self.image_search_folder = ""
         self.image_search_folder_label.setText("尚未选择文件夹")
         self.image_search_number.clear()
         self.image_search_results.clear()
         self.copy_images_button.setEnabled(False)
+        self.export_button.setEnabled(False)
+        self.copy_not_found_button.setEnabled(False)
         self.image_search_result_count.clear()
         self.image_search_preview.setText("查询结果图片会在这里预览")
+        self._current_search_matches = []
+        self._not_found_identifiers = []
+        self.export_path_label.setText("尚未选择导出文件夹")
+        self.export_path_label.setStyleSheet(
+            "color: #606266; font-size: 11px; padding: 2px 4px; "
+            "background: #f5f5f5; border-radius: 3px;"
+        )
 
     # ------------------------------------------------------------------
     # 良品 / NG 统计
@@ -907,14 +1230,27 @@ class ToolboxView(QWidget):
         tab_layout.setContentsMargins(16, 16, 16, 16)
         tab_layout.setSpacing(10)
 
+        hint_row = QHBoxLayout()
         hint = QLabel(
             "选择需统计文件夹：根目录直接存放良品图，子文件夹NG存放NG图。\n"
             "支持同时选择多个文件夹合并统计；同一批次编号跨文件夹会自动合并。\n"
-            "支持文件名格式：高1、低1、侧1、A1、B1 或 Y-26100002-027-A（编号027，A面）。"
+            "支持文件名格式：高1、低1、侧1、A1、B1、Y-26100002-027-A（编号027，A面）、\n"
+            "以及 T 开头格式：T-NO-A165-20261108-Result=NG_mark.png（T 后面为类别）。"
         )
         hint.setStyleSheet("color: #666; font-size: 12px;")
         hint.setWordWrap(True)
-        tab_layout.addWidget(hint)
+        hint_row.addWidget(hint, 1)
+
+        self._product_max_label = QLabel("")
+        self._product_max_label.setStyleSheet(
+            "QLabel { color: #2f4b7c; font-size: 13px; font-weight: bold; "
+            "background: #f0f4ff; border: 1px solid #c7d7f5; border-radius: 4px; "
+            "padding: 8px 12px; }"
+        )
+        self._product_max_label.setWordWrap(True)
+        self._product_max_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        hint_row.addWidget(self._product_max_label)
+        tab_layout.addLayout(hint_row)
 
         self._ng_dt_start = None
         self._ng_dt_end = None
@@ -1037,6 +1373,7 @@ class ToolboxView(QWidget):
             "QListWidget::item { padding: 3px 6px; }"
             "QListWidget::item:selected { background-color: #e3f2fd; color: #1a56db; }"
         )
+        self.ng_folder_list.itemDoubleClicked.connect(self._open_ng_folder)
         tab_layout.addWidget(self.ng_folder_list)
 
         btn_row2 = QHBoxLayout()
@@ -1087,6 +1424,7 @@ class ToolboxView(QWidget):
                 self.ng_folder_list.addItem(p)
             if paths:
                 self.stats_btn.setEnabled(True)
+        self._refresh_product_max_ids()
 
     def _add_ng_folder(self):
         settings = QSettings("ProductionManagement", "Client")
@@ -1121,6 +1459,7 @@ class ToolboxView(QWidget):
 
         all_paths = [self.ng_folder_list.item(i).text() for i in range(self.ng_folder_list.count())]
         settings.setValue(NG_FOLDER_SETTINGS_KEY, ";".join(all_paths))
+        self._refresh_product_max_ids()
 
     def _remove_ng_folder(self):
         current = self.ng_folder_list.currentRow()
@@ -1134,6 +1473,7 @@ class ToolboxView(QWidget):
         settings = QSettings("ProductionManagement", "Client")
         all_paths = [self.ng_folder_list.item(i).text() for i in range(self.ng_folder_list.count())]
         settings.setValue(NG_FOLDER_SETTINGS_KEY, ";".join(all_paths))
+        self._refresh_product_max_ids()
 
     def _clear_ng_folders(self):
         self.ng_folder_list.clear()
@@ -1141,6 +1481,133 @@ class ToolboxView(QWidget):
         self._reset_ng_batch_filter()
         settings = QSettings("ProductionManagement", "Client")
         settings.setValue(NG_FOLDER_SETTINGS_KEY, "")
+        self._refresh_product_max_ids()
+
+    _BATCH_DIR_RE = re.compile(r"^\d{8}", re.IGNORECASE)
+    _BATCH_DATE_RE = re.compile(r"(\d{8})")
+
+    def _extract_product_name(self, folder_path: str) -> str:
+        parts = Path(folder_path).parts
+        for part in reversed(parts):
+            if not part:
+                continue
+            if "Y-" in part.upper():
+                continue
+            if self._BATCH_DIR_RE.match(part):
+                continue
+            return part
+        return os.path.basename(folder_path) or folder_path
+
+    def _extract_batch_date(self, batch_dir_name: str) -> str:
+        m = self._BATCH_DATE_RE.search(batch_dir_name)
+        return m.group(1) if m else ""
+
+    def _pid_from_filename(self, name: str) -> int | None:
+        name_without_ext = os.path.splitext(name)[0]
+        y_match = Y_PATTERN.search(name)
+        if y_match:
+            return int(y_match.group(2))
+        t_match = T_PATTERN.match(name_without_ext)
+        if t_match:
+            side_num = T_SIDE_NUMBER_PATTERN.search(name_without_ext)
+            if side_num:
+                return int(side_num.group(2))
+            for m in _STANDALONE_NUMBER_RE.finditer(name_without_ext):
+                if not _DATE8_RE.fullmatch(m.group(1)):
+                    return int(m.group(1))
+            return None
+        side_match = _SIDE_NUMBER_RE.search(name)
+        if side_match:
+            return int(side_match.group(1))
+        for m in _STANDALONE_NUMBER_RE.finditer(name):
+            if not _DATE8_RE.fullmatch(m.group(1)):
+                return int(m.group(1))
+        return None
+
+    @staticmethod
+    def _is_ng_path(file_path: Path | str, root_path: Path | str | None = None) -> bool:
+        path_str = str(file_path)
+        name = os.path.basename(path_str)
+        name_without_ext = os.path.splitext(name)[0]
+        filename_says_ng = "NG" in name_without_ext.upper()
+        if filename_says_ng:
+            return True
+        if root_path is not None:
+            try:
+                rel_root = os.path.relpath(os.path.dirname(path_str), str(root_path))
+            except ValueError:
+                rel_root = path_str
+            is_ng_folder = (rel_root != ".") and ("NG" in rel_root.upper())
+            return is_ng_folder
+        parent = os.path.dirname(path_str)
+        return "NG" in parent.upper()
+
+    def _scan_latest_batch_max_pid(self, folder_path: str) -> tuple[str | None, int | None]:
+        batch_files: dict[str, list[str]] = {}
+        try:
+            for root, dirs, filenames in os.walk(folder_path):
+                rel = os.path.relpath(root, folder_path)
+                if rel == ".":
+                    batch_key = "."
+                else:
+                    first_level = rel.split(os.sep)[0]
+                    if self._BATCH_DIR_RE.match(first_level):
+                        batch_key = first_level
+                    else:
+                        batch_key = "."
+                batch_files.setdefault(batch_key, []).extend(filenames)
+        except OSError:
+            return None, None
+
+        if not batch_files:
+            return None, None
+
+        sorted_batches = sorted(batch_files.keys(), key=self._extract_batch_date)
+        latest_batch = sorted_batches[-1]
+        latest_date = self._extract_batch_date(latest_batch)
+
+        max_pid = None
+        for name in batch_files[latest_batch]:
+            pid = self._pid_from_filename(name)
+            if pid is not None and (max_pid is None or pid > max_pid):
+                max_pid = pid
+
+        return latest_date or None, max_pid
+
+    def _refresh_product_max_ids(self):
+        product_best: dict[str, tuple[str | None, int]] = {}
+        for i in range(self.ng_folder_list.count()):
+            folder_path = self.ng_folder_list.item(i).text()
+            product = self._extract_product_name(folder_path)
+            latest_date, max_pid = self._scan_latest_batch_max_pid(folder_path)
+            if max_pid is None:
+                continue
+            prev = product_best.get(product)
+            if prev is None:
+                product_best[product] = (latest_date, max_pid)
+            else:
+                prev_date, prev_pid = prev
+                if (latest_date or "") >= (prev_date or ""):
+                    product_best[product] = (latest_date, max_pid)
+
+        if not product_best:
+            self._product_max_label.setText("")
+            self._product_max_label.hide()
+            return
+
+        lines = ["各产品当前最大编号（最新批次）："]
+        for product, (date_str, max_pid) in sorted(product_best.items()):
+            date_tag = f" [{date_str}]" if date_str else ""
+            lines.append(f"  {product}{date_tag}　→　{max_pid}")
+        self._product_max_label.setText("\n".join(lines))
+        self._product_max_label.show()
+
+    def _open_ng_folder(self, item):
+        folder_path = item.text()
+        if folder_path and os.path.isdir(folder_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder_path))
+        else:
+            QMessageBox.warning(self, "提示", f"文件夹不存在：\n{folder_path}")
 
     def _analyze_ng_stats(self):
         all_parent_paths = [self.ng_folder_list.item(i).text() for i in range(self.ng_folder_list.count())]
@@ -1153,8 +1620,9 @@ class ToolboxView(QWidget):
         range_start = int(range_start_text) if range_start_text else None
         range_end = int(range_end_text) if range_end_text else None
 
-        ok_ids_by_batch: dict[str, set[str]] = {}
-        ng_ids_by_batch: dict[str, set[str]] = {}
+        all_ok_ids_by_batch: dict[str, set[str]] = {}
+        all_ng_ids_by_batch: dict[str, set[str]] = {}
+        pid_ctimes: dict[str, list[float]] = {}
         batch_ctimes: dict[str, list[float]] = {}
         ng_defect_filenames = []
         stray_ng_filenames: list[tuple[str, str]] = []
@@ -1172,45 +1640,74 @@ class ToolboxView(QWidget):
                         is_ng = is_ng_folder or filename_says_ng
                         if filename_says_ng and not is_ng_folder:
                             stray_ng_filenames.append((parent_path, full_path))
-                        y_match = Y_PATTERN.search(name)
-                        if y_match:
-                            batch = y_match.group(1)
-                            pid = int(y_match.group(2))
+                        t_match = T_PATTERN.match(name_without_ext)
+                        if t_match:
+                            batch = t_match.group(1)
                         else:
-                            match = re.search(r"(?:[高低侧ABC]\s*)?(\d+)", name, re.IGNORECASE)
-                            if not match:
-                                if is_ng:
-                                    invalid_entries.append((parent_path, full_path))
-                                continue
-                            pid = int(match.group(1))
-                            batch = "老格式"
-                        if range_start is not None and pid < range_start:
-                            continue
-                        if range_end is not None and pid > range_end:
+                            y_match = Y_PATTERN.search(name)
+                            if y_match:
+                                batch = y_match.group(1)
+                            else:
+                                batch = "老格式"
+                        pid = self._pid_from_filename(name)
+                        if pid is None:
+                            if is_ng:
+                                invalid_entries.append((parent_path, full_path))
                             continue
                         pid_str = str(pid)
+                        ckey = f"{batch}|{pid_str}"
                         ftime = None
                         try:
                             ftime = os.path.getmtime(full_path)
                             batch_ctimes.setdefault(batch, []).append(ftime)
+                            pid_ctimes.setdefault(ckey, []).append(ftime)
                         except OSError:
                             pass
-                        if self._ng_dt_start is not None or self._ng_dt_end is not None:
-                            if ftime is None:
-                                continue
-                            file_dt = QDateTime.fromSecsSinceEpoch(int(ftime))
-                            if self._ng_dt_start is not None and file_dt < self._ng_dt_start:
-                                continue
-                            if self._ng_dt_end is not None and file_dt >= self._ng_dt_end:
-                                continue
                         if is_ng:
-                            ng_ids_by_batch.setdefault(batch, set()).add(pid_str)
+                            all_ng_ids_by_batch.setdefault(batch, set()).add(pid_str)
                             ng_defect_filenames.append(name)
                         else:
-                            ok_ids_by_batch.setdefault(batch, set()).add(pid_str)
+                            all_ok_ids_by_batch.setdefault(batch, set()).add(pid_str)
         except OSError as exc:
             QMessageBox.critical(self, "读取失败", f"读取文件夹失败：{exc}")
             return
+
+        use_time_filter = self._ng_dt_start is not None or self._ng_dt_end is not None
+
+        def _pid_in_time_range(ckey: str) -> bool:
+            times = pid_ctimes.get(ckey)
+            if not times:
+                return not use_time_filter
+            for ts in times:
+                dt = QDateTime.fromSecsSinceEpoch(int(ts))
+                if self._ng_dt_start is not None and dt < self._ng_dt_start:
+                    continue
+                if self._ng_dt_end is not None and dt >= self._ng_dt_end:
+                    continue
+                return True
+            return False
+
+        ok_ids_by_batch: dict[str, set[str]] = {}
+        ng_ids_by_batch: dict[str, set[str]] = {}
+        for batch in set(all_ok_ids_by_batch.keys()) | set(all_ng_ids_by_batch.keys()):
+            for pid_str in all_ok_ids_by_batch.get(batch, set()):
+                ckey = f"{batch}|{pid_str}"
+                if range_start is not None and int(pid_str) < range_start:
+                    continue
+                if range_end is not None and int(pid_str) > range_end:
+                    continue
+                if use_time_filter and not _pid_in_time_range(ckey):
+                    continue
+                ok_ids_by_batch.setdefault(batch, set()).add(pid_str)
+            for pid_str in all_ng_ids_by_batch.get(batch, set()):
+                ckey = f"{batch}|{pid_str}"
+                if range_start is not None and int(pid_str) < range_start:
+                    continue
+                if range_end is not None and int(pid_str) > range_end:
+                    continue
+                if use_time_filter and not _pid_in_time_range(ckey):
+                    continue
+                ng_ids_by_batch.setdefault(batch, set()).add(pid_str)
 
         available_batches = sorted(set(ok_ids_by_batch.keys()) | set(ng_ids_by_batch.keys()))
         selected_batch = self.batch_filter.currentData()
@@ -1334,10 +1831,12 @@ class ToolboxView(QWidget):
         category_order = ("高", "低", "侧", "A", "B", "C")
         for batch in batches:
             batch_has_rows = False
+            seen_categories = set()
             for category in category_order:
                 category_ids = defect_ids_by_category.get((batch, category))
                 if not category_ids:
                     continue
+                seen_categories.add(category)
                 batch_has_rows = True
                 category_count = len(category_ids)
                 batch_total = len(batch_stats[batch][0]) + len(batch_stats[batch][1])
@@ -1351,8 +1850,24 @@ class ToolboxView(QWidget):
                     f"<td style='border:1px solid #ccc;padding:6px;text-align:left;color:#c62828;'>{identifiers}</td>"
                     "</tr>"
                 )
-            if batch_has_rows:
-                continue
+            extra_categories = sorted(
+                cat for (b, cat) in defect_ids_by_category if b == batch and cat not in seen_categories
+            )
+            for category in extra_categories:
+                category_ids = defect_ids_by_category[(batch, category)]
+                batch_has_rows = True
+                category_count = len(category_ids)
+                batch_total = len(batch_stats[batch][0]) + len(batch_stats[batch][1])
+                rate = category_count / batch_total * 100 if batch_total else 0
+                identifiers = "、".join(sorted(category_ids, key=int))
+                table_lines.append(
+                    "<tr>"
+                    f"<td style='border:1px solid #ccc;padding:6px;text-align:center;font-weight:bold;'>{batch} / {html.escape(category)}</td>"
+                    f"<td style='border:1px solid #ccc;padding:6px;text-align:center;color:#c62828;'>"
+                    f"{category_count} 个 / {rate:.2f}%</td>"
+                    f"<td style='border:1px solid #ccc;padding:6px;text-align:left;color:#c62828;'>{identifiers}</td>"
+                    "</tr>"
+                )
         if not defect_ids_by_category:
             table_lines.append(
                 "<tr><td colspan='3' style='border:1px solid #ccc;padding:8px;text-align:center;color:#909399;'>"
@@ -1441,3 +1956,624 @@ class ToolboxView(QWidget):
         self.ng_warning_label.hide()
         settings = QSettings("ProductionManagement", "Client")
         settings.setValue(NG_FOLDER_SETTINGS_KEY, "")
+
+    # ------------------------------------------------------------------
+    # 工程人员每日任务进度
+    # ------------------------------------------------------------------
+    def _build_task_tab(self, tabs):
+        tab = QWidget()
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.setContentsMargins(16, 16, 16, 16)
+        tab_layout.setSpacing(10)
+
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(10)
+
+        top_bar.addWidget(QLabel("人员："))
+        self.task_person_combo = QComboBox()
+        self.task_person_combo.setEditable(True)
+        self.task_person_combo.setMinimumWidth(140)
+        self.task_person_combo.setStyleSheet(
+            "QComboBox { padding: 4px 8px; border: 1px solid #dcdfe6; border-radius: 4px; }"
+        )
+        self.task_person_combo.currentTextChanged.connect(self._on_task_person_changed)
+        top_bar.addWidget(self.task_person_combo)
+
+        add_person_btn = QPushButton("＋新建人员")
+        add_person_btn.setStyleSheet(
+            "QPushButton { background-color: #2f4b7c; color: white; padding: 4px 10px; "
+            "border-radius: 4px; font-size: 12px; }"
+            "QPushButton:hover { background-color: #3a5a94; }"
+        )
+        add_person_btn.clicked.connect(self._add_task_person)
+        top_bar.addWidget(add_person_btn)
+
+        del_person_btn = QPushButton("删除人员")
+        del_person_btn.setStyleSheet(
+            "QPushButton { background-color: #c0c4cc; color: white; padding: 4px 10px; "
+            "border-radius: 4px; font-size: 12px; }"
+            "QPushButton:hover { background-color: #909399; }"
+        )
+        del_person_btn.clicked.connect(self._delete_task_person)
+        top_bar.addWidget(del_person_btn)
+
+        top_bar.addSpacing(20)
+
+        top_bar.addWidget(QLabel("日期："))
+        self.task_date_edit = QDateEdit()
+        self.task_date_edit.setCalendarPopup(True)
+        self.task_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.task_date_edit.setDate(QDate.currentDate())
+        self.task_date_edit.setStyleSheet(
+            "QDateEdit { padding: 4px 8px; border: 1px solid #dcdfe6; border-radius: 4px; }"
+        )
+        self.task_date_edit.dateChanged.connect(self._on_task_date_changed)
+        top_bar.addWidget(self.task_date_edit)
+
+        today_btn = QPushButton("今天")
+        today_btn.setStyleSheet(
+            "QPushButton { background-color: #e8f0fe; color: #1a56db; padding: 4px 12px; "
+            "border-radius: 4px; border: 1px solid #1a56db; font-size: 12px; }"
+            "QPushButton:hover { background-color: #d4e3fc; }"
+        )
+        today_btn.clicked.connect(lambda: self.task_date_edit.setDate(QDate.currentDate()))
+        top_bar.addWidget(today_btn)
+
+        top_bar.addStretch(1)
+
+        self.task_summary_label = QLabel("")
+        self.task_summary_label.setStyleSheet(
+            "color: #2f4b7c; font-size: 13px; font-weight: bold; padding: 2px 10px; "
+            "background: #f0f5ff; border-radius: 4px;"
+        )
+        top_bar.addWidget(self.task_summary_label)
+
+        tab_layout.addLayout(top_bar)
+
+        form_box = QGroupBox("新增 / 编辑任务")
+        form_box.setStyleSheet(
+            "QGroupBox { font-weight: bold; color: #2f4b7c; border: 1px solid #e4e7ed; "
+            "border-radius: 4px; margin-top: 10px; padding-top: 10px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }"
+        )
+        form_layout = QHBoxLayout(form_box)
+        form_layout.setSpacing(8)
+
+        form_layout.addWidget(QLabel("任务："))
+        self.task_content_edit = QLineEdit()
+        self.task_content_edit.setPlaceholderText("输入今日任务描述，例如：完成 A 客户方案初稿")
+        self.task_content_edit.setStyleSheet(
+            "QLineEdit { padding: 5px 10px; border: 1px solid #dcdfe6; border-radius: 4px; }"
+        )
+        form_layout.addWidget(self.task_content_edit, 3)
+
+        form_layout.addWidget(QLabel("状态："))
+        self.task_status_combo = QComboBox()
+        for key, label in TASK_STATUS_LABELS.items():
+            self.task_status_combo.addItem(label, key)
+        self.task_status_combo.setStyleSheet(
+            "QComboBox { padding: 5px 8px; border: 1px solid #dcdfe6; border-radius: 4px; min-width: 90px; }"
+        )
+        form_layout.addWidget(self.task_status_combo)
+
+        form_layout.addWidget(QLabel("进度："))
+        self.task_progress_spin = QSpinBox()
+        self.task_progress_spin.setRange(0, 100)
+        self.task_progress_spin.setSuffix(" %")
+        self.task_progress_spin.setStyleSheet(
+            "QSpinBox { padding: 5px 8px; border: 1px solid #dcdfe6; border-radius: 4px; min-width: 80px; }"
+        )
+        form_layout.addWidget(self.task_progress_spin)
+
+        add_task_btn = QPushButton("添加")
+        add_task_btn.setStyleSheet(
+            "QPushButton { background-color: #67c23a; color: white; padding: 5px 18px; "
+            "border-radius: 4px; }"
+            "QPushButton:hover { background-color: #85ce61; }"
+        )
+        add_task_btn.clicked.connect(self._add_or_update_task)
+        form_layout.addWidget(add_task_btn)
+
+        self.task_cancel_btn = QPushButton("取消编辑")
+        self.task_cancel_btn.setEnabled(False)
+        self.task_cancel_btn.setStyleSheet(
+            "QPushButton { background-color: #909399; color: white; padding: 5px 14px; "
+            "border-radius: 4px; }"
+            "QPushButton:hover { background-color: #a6a9ad; }"
+            "QPushButton:disabled { background-color: #dcdfe6; color: #fff; }"
+        )
+        self.task_cancel_btn.clicked.connect(self._cancel_task_edit)
+        form_layout.addWidget(self.task_cancel_btn)
+
+        tab_layout.addWidget(form_box)
+
+        self.task_table = QTableWidget(0, 6)
+        self.task_table.setHorizontalHeaderLabels(["", "任务内容", "状态", "进度", "备注", "操作"])
+        self.task_table.verticalHeader().setVisible(False)
+        self.task_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.task_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.task_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.task_table.setAlternatingRowColors(True)
+        self.task_table.setStyleSheet(
+            "QTableWidget { gridline-color: #ebeef5; alternate-background-color: #fafbfc; "
+            "border: 1px solid #e4e7ed; border-radius: 4px; }"
+            "QHeaderView::section { background-color: #f5f7fa; padding: 6px 8px; "
+            "border: none; border-right: 1px solid #ebeef5; font-weight: bold; color: #606266; }"
+        )
+        header = self.task_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.task_table.doubleClicked.connect(self._on_task_double_clicked)
+        tab_layout.addWidget(self.task_table, 1)
+
+        bottom_bar = QHBoxLayout()
+        bottom_bar.setSpacing(8)
+
+        week_btn = QPushButton("查看本周汇总")
+        week_btn.setStyleSheet(
+            "QPushButton { background-color: #1976d2; color: white; padding: 5px 14px; "
+            "border-radius: 4px; }"
+            "QPushButton:hover { background-color: #1e88e5; }"
+        )
+        week_btn.clicked.connect(self._show_weekly_summary)
+        bottom_bar.addWidget(week_btn)
+
+        export_btn = QPushButton("导出本日任务")
+        export_btn.setStyleSheet(
+            "QPushButton { background-color: #2f4b7c; color: white; padding: 5px 14px; "
+            "border-radius: 4px; }"
+            "QPushButton:hover { background-color: #3a5a94; }"
+        )
+        export_btn.clicked.connect(self._export_today_tasks)
+        bottom_bar.addWidget(export_btn)
+
+        bottom_bar.addStretch(1)
+
+        self.task_edit_id = None
+        self._task_data = _load_tasks_data()
+        self._init_task_person_combo()
+        tabs.addTab(tab, "我的任务")
+
+    # --- task data helpers ---
+    def _init_task_person_combo(self):
+        settings = QSettings("ProductionManagement", "Client")
+        saved = settings.value(TASK_PERSON_SETTINGS_KEY, "", type=str)
+        self.task_person_combo.blockSignals(True)
+        self.task_person_combo.clear()
+        persons = list(self._task_data.keys())
+        if not persons:
+            persons = ["默认"]
+            self._task_data["默认"] = {}
+        self.task_person_combo.addItems(persons)
+        if saved and saved in persons:
+            self.task_person_combo.setCurrentText(saved)
+        else:
+            self.task_person_combo.setCurrentText(persons[0])
+        self.task_person_combo.blockSignals(False)
+        self._refresh_task_table()
+
+    def _current_person(self) -> str:
+        return self.task_person_combo.currentText().strip()
+
+    def _current_date_str(self) -> str:
+        return self.task_date_edit.date().toString("yyyy-MM-dd")
+
+    def _on_task_person_changed(self, text: str):
+        text = text.strip()
+        if not text:
+            return
+        self._task_data.setdefault(text, {})
+        _save_tasks_data(self._task_data)
+        QSettings("ProductionManagement", "Client").setValue(TASK_PERSON_SETTINGS_KEY, text)
+        self._refresh_task_table()
+
+    def _on_task_date_changed(self):
+        self.task_edit_id = None
+        self.task_cancel_btn.setEnabled(False)
+        self._refresh_task_table()
+
+    def _add_task_person(self):
+        name, ok = QInputDialog.getText(self, "新建人员", "请输入人员姓名：")
+        if ok and name.strip():
+            name = name.strip()
+            if name not in self._task_data:
+                self._task_data[name] = {}
+                _save_tasks_data(self._task_data)
+                self.task_person_combo.addItem(name)
+            self.task_person_combo.setCurrentText(name)
+
+    def _delete_task_person(self):
+        name = self._current_person()
+        if name in ("默认", ""):
+            QMessageBox.information(self, "提示", "默认人员不可删除")
+            return
+        ret = QMessageBox.question(
+            self, "确认", f"确定删除人员「{name}」及其所有任务记录？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if ret == QMessageBox.Yes:
+            self._task_data.pop(name, None)
+            _save_tasks_data(self._task_data)
+            idx = self.task_person_combo.findText(name)
+            if idx >= 0:
+                self.task_person_combo.removeItem(idx)
+            if self.task_person_combo.count() == 0:
+                self._task_data["默认"] = {}
+                self.task_person_combo.addItem("默认")
+            self.task_person_combo.setCurrentIndex(0)
+
+    # --- add / edit / delete ---
+    def _add_or_update_task(self):
+        person = self._current_person()
+        if not person:
+            QMessageBox.warning(self, "提示", "请先选择或创建人员")
+            return
+        content = self.task_content_edit.text().strip()
+        if not content:
+            QMessageBox.warning(self, "提示", "请输入任务内容")
+            return
+        status = self.task_status_combo.currentData()
+        progress = self.task_progress_spin.value()
+        date_str = self._current_date_str()
+
+        person_data = self._task_data.setdefault(person, {})
+        day_tasks = person_data.setdefault(date_str, [])
+
+        if self.task_edit_id:
+            for t in day_tasks:
+                if t.get("id") == self.task_edit_id:
+                    t["content"] = content
+                    t["status"] = status
+                    t["progress"] = progress
+                    break
+        else:
+            day_tasks.append({
+                "id": uuid.uuid4().hex[:8],
+                "content": content,
+                "status": status,
+                "progress": progress,
+                "note": "",
+            })
+
+        _save_tasks_data(self._task_data)
+        self._cancel_task_edit()
+        self.task_content_edit.clear()
+        self.task_progress_spin.setValue(0)
+        self._refresh_task_table()
+
+    def _cancel_task_edit(self):
+        self.task_edit_id = None
+        self.task_content_edit.clear()
+        self.task_status_combo.setCurrentIndex(0)
+        self.task_progress_spin.setValue(0)
+        self.task_cancel_btn.setEnabled(False)
+        self._highlight_edit_row(None)
+
+    def _delete_task(self, task_id: str):
+        person = self._current_person()
+        date_str = self._current_date_str()
+        day_tasks = self._task_data.get(person, {}).get(date_str, [])
+        for i, t in enumerate(day_tasks):
+            if t.get("id") == task_id:
+                day_tasks.pop(i)
+                break
+        _save_tasks_data(self._task_data)
+        if self.task_edit_id == task_id:
+            self._cancel_task_edit()
+        self._refresh_task_table()
+
+    def _set_task_status(self, task_id: str, status: str):
+        person = self._current_person()
+        date_str = self._current_date_str()
+        for t in self._task_data.get(person, {}).get(date_str, []):
+            if t.get("id") == task_id:
+                t["status"] = status
+                if status == TASK_STATUS_DONE:
+                    t["progress"] = 100
+                break
+        _save_tasks_data(self._task_data)
+        self._refresh_task_table()
+
+    def _set_task_progress(self, task_id: str, progress: int):
+        person = self._current_person()
+        date_str = self._current_date_str()
+        for t in self._task_data.get(person, {}).get(date_str, []):
+            if t.get("id") == task_id:
+                t["progress"] = progress
+                if progress == 100:
+                    t["status"] = TASK_STATUS_DONE
+                elif progress > 0 and t["status"] == TASK_STATUS_TODO:
+                    t["status"] = TASK_STATUS_DOING
+                break
+        _save_tasks_data(self._task_data)
+        self._refresh_task_table()
+
+    def _set_task_note(self, task_id: str, note: str):
+        person = self._current_person()
+        date_str = self._current_date_str()
+        for t in self._task_data.get(person, {}).get(date_str, []):
+            if t.get("id") == task_id:
+                t["note"] = note
+                break
+        _save_tasks_data(self._task_data)
+
+    # --- table rendering ---
+    def _refresh_task_table(self):
+        person = self._current_person()
+        date_str = self._current_date_str()
+        day_tasks = self._task_data.get(person, {}).get(date_str, [])
+
+        self.task_table.setRowCount(0)
+        for task in day_tasks:
+            row = self.task_table.rowCount()
+            self.task_table.insertRow(row)
+
+            status = task.get("status", TASK_STATUS_TODO)
+            if status == TASK_STATUS_DONE:
+                check_item = QTableWidgetItem("✓")
+                check_item.setTextAlignment(Qt.AlignCenter)
+                check_item.setForeground(QColor(TASK_STATUS_COLORS[TASK_STATUS_DONE]))
+                font = check_item.font()
+                font.setBold(True)
+                check_item.setFont(font)
+                self.task_table.setItem(row, 0, check_item)
+
+            content_item = QTableWidgetItem(task.get("content", ""))
+            if status == TASK_STATUS_DONE:
+                f = content_item.font()
+                f.setStrikeOut(True)
+                content_item.setFont(f)
+                content_item.setForeground(QColor("#909399"))
+            self.task_table.setItem(row, 1, content_item)
+
+            status_btn = QPushButton(TASK_STATUS_LABELS.get(status, status))
+            color = TASK_STATUS_COLORS.get(status, "#909399")
+            status_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {color}; color: white; "
+                f"padding: 3px 10px; border-radius: 3px; font-size: 12px; }}"
+                f"QPushButton:hover {{ opacity: 0.9; }}"
+            )
+            status_btn.clicked.connect(lambda _=False, tid=task["id"]: self._cycle_task_status(tid))
+            self.task_table.setCellWidget(row, 2, status_btn)
+
+            progress = task.get("progress", 0)
+            progress_widget = QWidget()
+            prog_layout = QHBoxLayout(progress_widget)
+            prog_layout.setContentsMargins(4, 2, 4, 2)
+            prog_layout.setSpacing(4)
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(progress)
+            bar.setFormat("%v%")
+            bar.setFixedHeight(16)
+            bar.setStyleSheet(
+                "QProgressBar { border: 1px solid #dcdfe6; border-radius: 3px; text-align: center; "
+                "background: #f5f7fa; font-size: 11px; color: #606266; }"
+                "QProgressBar::chunk { border-radius: 2px; }"
+            )
+            if progress >= 100:
+                bar.setStyleSheet(
+                    "QProgressBar { border: 1px solid #c2e7b0; border-radius: 3px; text-align: center; "
+                    "background: #f0f9eb; font-size: 11px; color: #67c23a; }"
+                    "QProgressBar::chunk { background-color: #67c23a; border-radius: 2px; }"
+                )
+            elif progress >= 50:
+                bar.setStyleSheet(
+                    "QProgressBar { border: 1px solid #fad79a; border-radius: 3px; text-align: center; "
+                    "background: #fdf6ec; font-size: 11px; color: #e6a23c; }"
+                    "QProgressBar::chunk { background-color: #e6a23c; border-radius: 2px; }"
+                )
+            minus_btn = QPushButton("-")
+            minus_btn.setFixedSize(22, 20)
+            minus_btn.setStyleSheet(
+                "QPushButton { background-color: #f5f7fa; border: 1px solid #dcdfe6; "
+                "border-radius: 3px; font-weight: bold; color: #606266; }"
+                "QPushButton:hover { background-color: #e4e7ed; }"
+            )
+            minus_btn.clicked.connect(lambda _=False, tid=task["id"]: self._set_task_progress(tid, max(0, task.get("progress", 0) - 10)))
+            plus_btn = QPushButton("+")
+            plus_btn.setFixedSize(22, 20)
+            plus_btn.setStyleSheet(
+                "QPushButton { background-color: #f0f9eb; border: 1px solid #c2e7b0; "
+                "border-radius: 3px; font-weight: bold; color: #67c23a; }"
+                "QPushButton:hover { background-color: #e1f3d8; }"
+            )
+            plus_btn.clicked.connect(lambda _=False, tid=task["id"]: self._set_task_progress(tid, min(100, task.get("progress", 0) + 10)))
+            prog_layout.addWidget(bar, 1)
+            prog_layout.addWidget(minus_btn)
+            prog_layout.addWidget(plus_btn)
+            self.task_table.setCellWidget(row, 3, progress_widget)
+
+            note_item = QTableWidgetItem(task.get("note", ""))
+            note_item.setForeground(QColor("#606266"))
+            self.task_table.setItem(row, 4, note_item)
+
+            op_widget = QWidget()
+            op_layout = QHBoxLayout(op_widget)
+            op_layout.setContentsMargins(2, 2, 2, 2)
+            op_layout.setSpacing(3)
+            edit_btn = QPushButton("编辑")
+            edit_btn.setFixedHeight(22)
+            edit_btn.setStyleSheet(
+                "QPushButton { background-color: #ecf5ff; color: #1976d2; border: 1px solid #b3d8ff; "
+                "border-radius: 3px; padding: 0 8px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #d9ecff; }"
+            )
+            edit_btn.clicked.connect(lambda _=False, tid=task["id"]: self._enter_task_edit(tid))
+            note_btn = QPushButton("备注")
+            note_btn.setFixedHeight(22)
+            note_btn.setStyleSheet(
+                "QPushButton { background-color: #fdf6ec; color: #e6a23c; border: 1px solid #f5dab1; "
+                "border-radius: 3px; padding: 0 8px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #faecd8; }"
+            )
+            note_btn.clicked.connect(lambda _=False, tid=task["id"]: self._edit_task_note(tid))
+            del_btn = QPushButton("删除")
+            del_btn.setFixedHeight(22)
+            del_btn.setStyleSheet(
+                "QPushButton { background-color: #fef0f0; color: #f56c6c; border: 1px solid #fbc4c4; "
+                "border-radius: 3px; padding: 0 8px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #fde2e2; }"
+            )
+            del_btn.clicked.connect(lambda _=False, tid=task["id"]: self._delete_task(tid))
+            op_layout.addWidget(edit_btn)
+            op_layout.addWidget(note_btn)
+            op_layout.addWidget(del_btn)
+            self.task_table.setCellWidget(row, 5, op_widget)
+
+        self._refresh_task_summary()
+
+    def _refresh_task_summary(self):
+        person = self._current_person()
+        date_str = self._current_date_str()
+        day_tasks = self._task_data.get(person, {}).get(date_str, [])
+        total = len(day_tasks)
+        if total == 0:
+            self.task_summary_label.setText(f"📋 {date_str}　共 0 项任务")
+            return
+        done = sum(1 for t in day_tasks if t.get("status") == TASK_STATUS_DONE)
+        doing = sum(1 for t in day_tasks if t.get("status") == TASK_STATUS_DOING)
+        blocked = sum(1 for t in day_tasks if t.get("status") == TASK_STATUS_BLOCKED)
+        avg_progress = round(sum(t.get("progress", 0) for t in day_tasks) / total)
+        rate = round(done / total * 100)
+        self.task_summary_label.setText(
+            f"📋 {date_str}　共 {total} 项　✅ {done}　🚧 {doing}　⚠ {blocked}　"
+            f"完成率 {rate}%　平均进度 {avg_progress}%"
+        )
+
+    def _cycle_task_status(self, task_id: str):
+        order = [TASK_STATUS_TODO, TASK_STATUS_DOING, TASK_STATUS_DONE, TASK_STATUS_BLOCKED]
+        person = self._current_person()
+        date_str = self._current_date_str()
+        day_tasks = self._task_data.get(person, {}).get(date_str, [])
+        for t in day_tasks:
+            if t.get("id") == task_id:
+                cur = t.get("status", TASK_STATUS_TODO)
+                idx = order.index(cur) if cur in order else 0
+                nxt = order[(idx + 1) % len(order)]
+                self._set_task_status(task_id, nxt)
+                return
+
+    def _enter_task_edit(self, task_id: str):
+        person = self._current_person()
+        date_str = self._current_date_str()
+        for t in self._task_data.get(person, {}).get(date_str, []):
+            if t.get("id") == task_id:
+                self.task_edit_id = task_id
+                self.task_content_edit.setText(t.get("content", ""))
+                status = t.get("status", TASK_STATUS_TODO)
+                idx = self.task_status_combo.findData(status)
+                if idx >= 0:
+                    self.task_status_combo.setCurrentIndex(idx)
+                self.task_progress_spin.setValue(t.get("progress", 0))
+                self.task_cancel_btn.setEnabled(True)
+                self._highlight_edit_row(task_id)
+                break
+
+    def _highlight_edit_row(self, task_id):
+        for row in range(self.task_table.rowCount()):
+            item = self.task_table.item(row, 1)
+            if not item:
+                continue
+            is_editing = False
+            if task_id:
+                w = self.task_table.cellWidget(row, 5)
+                if w is not None:
+                    for btn in w.findChildren(QPushButton):
+                        if btn.text() == "编辑":
+                            is_editing = True
+                            break
+            for col in range(self.task_table.columnCount()):
+                it = self.task_table.item(row, col)
+                if it:
+                    it.setBackground(QColor("#fff7e6") if is_editing else QColor("transparent"))
+
+    def _edit_task_note(self, task_id: str):
+        person = self._current_person()
+        date_str = self._current_date_str()
+        day_tasks = self._task_data.get(person, {}).get(date_str, [])
+        for t in day_tasks:
+            if t.get("id") == task_id:
+                note, ok = QInputDialog.getMultiLineText(
+                    self, "编辑备注", "备注内容：", t.get("note", ""),
+                )
+                if ok:
+                    self._set_task_note(task_id, note)
+                    self._refresh_task_table()
+                return
+
+    def _on_task_double_clicked(self, index):
+        row = index.row()
+        person = self._current_person()
+        date_str = self._current_date_str()
+        day_tasks = self._task_data.get(person, {}).get(date_str, [])
+        if 0 <= row < len(day_tasks):
+            self._enter_task_edit(day_tasks[row]["id"])
+
+    def _show_weekly_summary(self):
+        person = self._current_person()
+        today = self.task_date_edit.date()
+        monday = today.addDays(-(today.dayOfWeek() - 1))
+        lines = [f"📊 {person} 的本周任务汇总", f"周期：{monday.toString('yyyy-MM-dd')} ~ {today.toString('yyyy-MM-dd')}", ""]
+
+        total_tasks = 0
+        total_done = 0
+        total_progress_sum = 0
+        details = []
+        for i in range(7):
+            d = monday.addDays(i)
+            ds = d.toString("yyyy-MM-dd")
+            day_tasks = self._task_data.get(person, {}).get(ds, [])
+            if not day_tasks:
+                continue
+            total_tasks += len(day_tasks)
+            done = sum(1 for t in day_tasks if t.get("status") == TASK_STATUS_DONE)
+            total_done += done
+            avg_p = round(sum(t.get("progress", 0) for t in day_tasks) / len(day_tasks))
+            total_progress_sum += avg_p * len(day_tasks)
+            weekday = ["一", "二", "三", "四", "五", "六", "日"][i]
+            details.append(f"  {ds}（周{weekday}）：{len(day_tasks)} 项　✅ {done}　平均进度 {avg_p}%")
+
+        if total_tasks == 0:
+            lines.append("本周暂无任务记录")
+        else:
+            lines.append(f"任务总数：{total_tasks}　已完成：{total_done}　"
+                         f"完成率：{round(total_done / total_tasks * 100)}%　"
+                         f"加权平均进度：{round(total_progress_sum / total_tasks)}%")
+            lines.append("")
+            lines.append("每日明细：")
+            lines.extend(details)
+
+        QMessageBox.information(self, "本周汇总", "\n".join(lines))
+
+    def _export_today_tasks(self):
+        person = self._current_person()
+        date_str = self._current_date_str()
+        day_tasks = self._task_data.get(person, {}).get(date_str, [])
+        if not day_tasks:
+            QMessageBox.information(self, "提示", "本日无任务可导出")
+            return
+        default_name = f"{person}_{date_str}_任务.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出为 CSV", default_name, "CSV 文件 (*.csv);;所有文件 (*.*)",
+        )
+        if not path:
+            return
+        try:
+            import csv
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow(["序号", "任务内容", "状态", "进度(%)", "备注"])
+                for i, t in enumerate(day_tasks, 1):
+                    status_label = TASK_STATUS_LABELS.get(t.get("status", ""), "")
+                    writer.writerow([
+                        i, t.get("content", ""), status_label,
+                        t.get("progress", 0), t.get("note", ""),
+                    ])
+            QMessageBox.information(self, "导出成功", f"已导出到：\n{path}")
+        except OSError as exc:
+            QMessageBox.critical(self, "导出失败", str(exc))

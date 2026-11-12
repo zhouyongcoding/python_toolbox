@@ -1,12 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from pathlib import Path
-
-project_dir = Path(SPECPATH)
 
 a = Analysis(
-    [str(project_dir / "run_toolbox.py")],
-    pathex=[str(project_dir)],
+    ['run_toolbox.py'],
+    pathex=[],
     binaries=[],
     datas=[],
     hiddenimports=[],
@@ -25,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="PythonToolbox",
+    name='PythonToolbox',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
