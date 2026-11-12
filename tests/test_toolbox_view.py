@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
 from app.ui.toolbox_view import (
     extract_ng_defect_category_ids,
     extract_unique_scan_ids,
+    filter_ng_defect_category_ids,
     create_image_clipboard_data,
     find_images_by_identifier,
     highlight_identifier_in_filename,
@@ -69,6 +70,26 @@ class ScanIdentifierTests(unittest.TestCase):
                 "A": {"3"},
                 "B": {"4"},
                 "C": {"5"},
+            },
+        )
+
+    def test_filters_defect_details_to_ng_ids_in_selected_range(self):
+        category_ids = extract_ng_defect_category_ids([
+            "高2070-20261021-mark.png",
+            "高2072-20261021-mark.png",
+            "低2075-20261021-mark.png",
+        ])
+
+        filtered_ids = filter_ng_defect_category_ids(
+            category_ids,
+            {"老格式": {"2072", "2075"}},
+        )
+
+        self.assertEqual(
+            filtered_ids,
+            {
+                ("老格式", "高"): {"2072"},
+                ("老格式", "低"): {"2075"},
             },
         )
 

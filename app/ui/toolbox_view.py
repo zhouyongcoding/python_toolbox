@@ -130,6 +130,18 @@ def extract_ng_defect_category_ids(filenames: list[str]) -> dict[tuple[str, str]
     return category_ids
 
 
+def filter_ng_defect_category_ids(
+    category_ids: dict[tuple[str, str], set[str]],
+    ng_ids_by_batch: dict[str, set[str]],
+) -> dict[tuple[str, str], set[str]]:
+    filtered_ids = {}
+    for key, ids in category_ids.items():
+        matching_ids = ids & ng_ids_by_batch.get(key[0], set())
+        if matching_ids:
+            filtered_ids[key] = matching_ids
+    return filtered_ids
+
+
 def read_filenames_from_folder(folder_path: str) -> list[str]:
     filenames = []
 
@@ -1742,7 +1754,10 @@ class ToolboxView(QWidget):
             final_ng_all.update(final_ng)
 
         total = len(final_ok_all) + len(final_ng_all)
-        defect_ids_by_category = extract_ng_defect_category_ids(ng_defect_filenames)
+        defect_ids_by_category = filter_ng_defect_category_ids(
+            extract_ng_defect_category_ids(ng_defect_filenames),
+            ng_ids_by_batch,
+        )
         if selected_batch:
             defect_ids_by_category = {
                 key: ids
