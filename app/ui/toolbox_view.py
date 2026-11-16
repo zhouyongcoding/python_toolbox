@@ -78,67 +78,152 @@ def _save_tasks_data(data: dict) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-Y_PATTERN = re.compile(r"[Y]-(\d+)-(\d+)-?([AB])(?=-|\.|$)", re.IGNORECASE)
+_SIDE_CHARS = r"[ABC高低侧左右]"
+Y_PATTERN = re.compile(
+    rf"Y-(\d+)-(?:([ABC高低侧左右])(\d+)|(\d+)(?:-([ABC高低侧左右]))?)(?=-|\.|$)",
+    re.IGNORECASE,
+)
+
+
+def _parse_y_match(match) -> tuple[str, str, str]:
+    batch = match.group(1)
+    if match.group(2):
+        side = match.group(2).upper()
+        pid = str(int(match.group(3)))
+    else:
+        pid = str(int(match.group(4)))
+        side = match.group(5).upper() if match.group(5) else "-"
+    return batch, pid, side
 T_PATTERN = re.compile(r"^T[-_]+([^-_]+)", re.IGNORECASE)
 T_SIDE_NUMBER_PATTERN = re.compile(r"([AB高低侧])\s*(\d+)", re.IGNORECASE)
 _DATE8_RE = re.compile(r"20\d{6}")
-_SIDE_NUMBER_RE = re.compile(r"[高低侧ABC]\s*(\d+)", re.IGNORECASE)
+_SIDE_NUMBER_RE = re.compile(r"([高低侧ABC])\s*(\d+)", re.IGNORECASE)
 _STANDALONE_NUMBER_RE = re.compile(r"(?<![A-Za-z\d])(\d{1,5})(?!\d)")
+_F_RE = re.compile(r"-R(\d+)(?=[-_]|\.|$)", re.IGNORECASE)
+_BATCH_RE = re.compile(r"T[-_](\d{6,8})", re.IGNORECASE)
+_SIDE_CHARS_STR = "ABC高低侧左右"
+_SIDE_CHARS_SET = set(_SIDE_CHARS_STR)
+_RETAKE_SUFFIX_RE = re.compile(r"[-_\s]*R\d+(?=[-_]|$).*$", re.IGNORECASE)
+
+
+def _clean_category(after_num: str) -> str:
+    stripped = _RETAKE_SUFFIX_RE.sub("", after_num).strip("-_ \t")
+    if not stripped or stripped[0].upper() != "L":
+        return "未分类"
+    sep = re.search(r"[-_]", stripped)
+    if sep:
+        return stripped[:sep.start()].strip()
+    return stripped
+
+
+def _t_identifier_and_category(stem: str) -> tuple[str, str] | None:
+    side_num = T_SIDE_NUMBER_PATTERN.search(stem)
+    if side_num:
+        pid = str(int(side_num.group(2)))
+        after_num = stem[side_num.end():]
+        return pid, _clean_category(after_num)
+    for match in _STANDALONE_NUMBER_RE.finditer(stem):
+        if not _DATE8_RE.fullmatch(match.group(1)):
+            pid = str(int(match.group(1)))
+            after_num = stem[match.end():]
+            return pid, _clean_category(after_num)
+    return None
+
+
+def extract_batch_category_from_path(path: Path | str) -> tuple[str, str]:
+    stem = os.path.splitext(os.path.basename(str(path)))[0]
+    batch_m = _BATCH_RE.search(stem)
+    if batch_m:
+        batch = batch_m.group(1)
+        id_info = _t_identifier_and_category(stem)
+        category = id_info[1] if id_info else "未分类"
+        return batch, category
+    y_m = Y_PATTERN.search(stem)
+    if y_m:
+        batch = y_m.group(1)
+        return batch, "未分类"
+    return "老格式", "未分类"
 
 
 def extract_unique_scan_ids(text: str) -> list[str]:
     identifiers = set()
     for match in Y_PATTERN.finditer(text):
-        identifiers.add(str(int(match.group(2))))
+        _, pid, _ = _parse_y_match(match)
+        identifiers.add(str(int(pid)))
     text_without_y = Y_PATTERN.sub('', text)
     for match in re.findall(r"(?:[高低侧AB]\s*)?(\d+)", text_without_y):
         identifiers.add(str(int(match)))
     return sorted(identifiers, key=int)
 
 
-def extract_ng_defect_category_ids(filenames: list[str]) -> dict[tuple[str, str], set[str]]:
-    category_ids: dict[tuple[str, str], set[str]] = {}
+def _extract_side(stem: str) -> str:
+    m = T_SIDE_NUMBER_PATTERN.search(stem)
+    if m:
+        return m.group(1).upper()
+    y_m = Y_PATTERN.search(stem)
+    if y_m:
+        _, _, side = _parse_y_match(y_m)
+        if side != "-":
+            return side
+    old_m = _SIDE_NUMBER_RE.search(stem)
+    if old_m:
+        return old_m.group(1).upper()
+    return "-"
+
+
+def extract_ng_defect_category_ids(filenames: list[str]) -> dict[str, dict[str, dict[str, set[str]]]]:
+    result: dict[str, dict[str, dict[str, set[str]]]] = {}
     for filename in filenames:
+        batch = None
+        category = "未分类"
+        side = "-"
+        pid = None
+
         t_match = T_PATTERN.match(filename)
         if t_match:
             batch = t_match.group(1)
             stem = os.path.splitext(filename)[0]
-            side_num = T_SIDE_NUMBER_PATTERN.search(stem)
-            if side_num:
-                pid = str(int(side_num.group(2)))
-                category = side_num.group(1).upper()
+            id_info = _t_identifier_and_category(stem)
+            if not id_info:
+                continue
+            pid, category = id_info
+            side = _extract_side(stem)
+        else:
+            y_match = Y_PATTERN.search(filename)
+            if y_match:
+                batch, pid, side = _parse_y_match(y_match)
             else:
-                num_match = re.search(r"(\d+)", stem)
-                if not num_match:
-                    continue
-                pid = str(int(num_match.group(1)))
-                category = "未分类"
-            category_ids.setdefault((batch, category), set()).add(pid)
+                side_num = _SIDE_NUMBER_RE.search(filename)
+                if side_num:
+                    batch = "老格式"
+                    pid = str(int(side_num.group(2)))
+                    side = side_num.group(1).upper()
+                else:
+                    standalone = _STANDALONE_NUMBER_RE.search(filename)
+                    if standalone and not _DATE8_RE.fullmatch(standalone.group(1)):
+                        batch = "老格式"
+                        pid = str(int(standalone.group(1)))
+
+        if not batch or not pid:
             continue
-        y_match = Y_PATTERN.search(filename)
-        if y_match:
-            batch = y_match.group(1)
-            pid = str(int(y_match.group(2)))
-            side = y_match.group(3).upper()
-            category_ids.setdefault((batch, side), set()).add(pid)
-            continue
-        category_match = re.match(r"^\s*(高|低|侧|A|B|C)\s*(?=\d)", filename, re.IGNORECASE)
-        identifier_match = re.search(r"(?:[高低侧ABC]\s*)?(\d+)", filename, re.IGNORECASE)
-        if category_match and identifier_match:
-            category = category_match.group(1).upper()
-            category_ids.setdefault(("老格式", category), set()).add(str(int(identifier_match.group(1))))
-    return category_ids
+        result.setdefault(batch, {}).setdefault(category, {}).setdefault(side, set()).add(pid)
+    return result
 
 
 def filter_ng_defect_category_ids(
-    category_ids: dict[tuple[str, str], set[str]],
+    category_ids: dict[str, dict[str, dict[str, set[str]]]],
     ng_ids_by_batch: dict[str, set[str]],
-) -> dict[tuple[str, str], set[str]]:
-    filtered_ids = {}
-    for key, ids in category_ids.items():
-        matching_ids = ids & ng_ids_by_batch.get(key[0], set())
-        if matching_ids:
-            filtered_ids[key] = matching_ids
+) -> dict[tuple[str, str, str], set[str]]:
+    filtered_ids: dict[tuple[str, str, str], set[str]] = {}
+    for batch, cats in category_ids.items():
+        batch_ng = ng_ids_by_batch.get(batch, set())
+        if not batch_ng:
+            continue
+        for category, sides in cats.items():
+            for side, pids in sides.items():
+                matching = pids & batch_ng
+                if matching:
+                    filtered_ids[(batch, category, side)] = matching
     return filtered_ids
 
 
@@ -153,22 +238,89 @@ def read_filenames_from_folder(folder_path: str) -> list[str]:
     return filenames
 
 
+def scan_batch_category_tree(folder_path: str) -> dict[str, dict[str, list[str]]]:
+    tree: dict[str, dict[str, set[str]]] = {}
+    try:
+        filenames = read_filenames_from_folder(folder_path)
+    except OSError:
+        return {}
+    for filename in filenames:
+        stem = os.path.splitext(filename)[0]
+        batch: str | None = None
+        category: str | None = None
+        pid: str | None = None
+
+        batch_m = _BATCH_RE.search(stem)
+        if batch_m:
+            batch = batch_m.group(1)
+            id_info = _t_identifier_and_category(stem)
+            if id_info:
+                pid, category = id_info
+        else:
+            y_m = Y_PATTERN.search(stem)
+            if y_m:
+                batch, pid, _ = _parse_y_match(y_m)
+                category = "未分类"
+
+        if not batch or not category or not pid:
+            continue
+        tree.setdefault(batch, {}).setdefault(category, set()).add(pid)
+
+    result: dict[str, dict[str, list[str]]] = {}
+    for batch in sorted(tree.keys()):
+        cats = tree[batch]
+        result[batch] = {
+            cat: sorted(ids, key=int)
+            for cat, ids in sorted(cats.items())
+        }
+    return result
+
+
+def extract_query_identifier(raw: str) -> str | None:
+    raw = raw.strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return raw
+    m = Y_PATTERN.search(raw)
+    if m:
+        return str(int(m.group(2)))
+    nums = re.findall(r"\d+", raw)
+    if nums:
+        nums.sort(key=len, reverse=True)
+        return str(int(nums[0]))
+    return None
+
+
+def _parse_y_search_query(raw: str) -> tuple[str, str] | None:
+    match = Y_PATTERN.fullmatch(raw.strip())
+    if not match:
+        return None
+    batch, pid, _ = _parse_y_match(match)
+    return batch, pid
+
+
 def find_images_by_identifier(folder_path: str, identifier: str) -> list[Path]:
     identifier = identifier.strip()
-    if not identifier.isdigit():
+    y_query = _parse_y_search_query(identifier)
+    if y_query:
+        query_batch, normalized_identifier = y_query
+    elif identifier.isdigit():
+        query_batch = None
+        normalized_identifier = identifier.lstrip("0") or "0"
+    else:
         raise ValueError("编号必须是数字")
 
-    normalized_identifier = identifier.lstrip("0") or "0"
     old_pattern = re.compile(
-        rf"(?<![A-Za-z0-9])(?:A|B|高|低|侧)?0*{re.escape(normalized_identifier)}(?!\d)",
+        rf"(?<![A-Za-z0-9])(?:{_SIDE_CHARS})?0*{re.escape(normalized_identifier)}(?:{_SIDE_CHARS})?(?![A-Za-z0-9])",
         re.IGNORECASE,
     )
     y_pattern = re.compile(
-        rf"Y-\d+-0*{re.escape(normalized_identifier)}-?[AB](?=-|\.|$)",
+        rf"Y-\d+-(?:{_SIDE_CHARS})?0*{re.escape(normalized_identifier)}(?:-{_SIDE_CHARS})?(?=-|\.|$)",
         re.IGNORECASE,
     )
     t_pattern = re.compile(
-        rf"T[-_][^-_]+[-_](?:[AB高低侧]\s*)?0*{re.escape(normalized_identifier)}(?=[-_]|\.|$)",
+        rf"T[-_][^-_]+[-_](?:{_SIDE_CHARS}\s*)?0*{re.escape(normalized_identifier)}(?=[-_]|\.|$)",
         re.IGNORECASE,
     )
     matches = []
@@ -182,6 +334,27 @@ def find_images_by_identifier(folder_path: str, identifier: str) -> list[Path]:
             if path.suffix.lower() not in IMAGE_EXTENSIONS:
                 continue
             stem = path.stem
+            if query_batch is not None:
+                y_matches = Y_PATTERN.finditer(stem)
+                if any(
+                    _parse_y_match(match)[0] == query_batch
+                    and _parse_y_match(match)[1] == normalized_identifier
+                    for match in y_matches
+                ):
+                    matches.append(path)
+                    continue
+
+                batch_match = _BATCH_RE.search(stem)
+                id_info = _t_identifier_and_category(stem) if T_PATTERN.match(stem) else None
+                if (
+                    batch_match
+                    and batch_match.group(1) == query_batch
+                    and id_info
+                    and id_info[0] == normalized_identifier
+                ):
+                    matches.append(path)
+                continue
+
             if Y_PATTERN.search(stem):
                 if y_pattern.search(stem):
                     matches.append(path)
@@ -193,6 +366,38 @@ def find_images_by_identifier(folder_path: str, identifier: str) -> list[Path]:
                     matches.append(path)
 
     return sorted(matches, key=lambda path: str(path).lower())
+
+
+def parse_export_key(path: Path) -> tuple[str, str, int] | None:
+    stem = path.stem
+    batch_m = _BATCH_RE.search(stem)
+    if not batch_m:
+        return None
+    batch = batch_m.group(1)
+    id_info = _t_identifier_and_category(stem)
+    if not id_info:
+        return None
+    pid, _ = id_info
+    f_m = _F_RE.search(stem)
+    f_num = int(f_m.group(1)) if f_m else 0
+    return (batch, pid, f_num)
+
+
+def deduplicate_export_paths(paths: list[Path]) -> tuple[list[Path], int]:
+    groups: dict[tuple[str, str], tuple[int, Path]] = {}
+    unknown: list[Path] = []
+    for p in paths:
+        key = parse_export_key(p)
+        if key is None:
+            unknown.append(p)
+            continue
+        batch, pid, f_num = key
+        group_key = (batch, pid)
+        if group_key not in groups or f_num > groups[group_key][0]:
+            groups[group_key] = (f_num, p)
+    kept = [item[1] for item in groups.values()] + unknown
+    return kept, len(paths) - len(kept)
+
 
 def create_image_clipboard_data(image_paths: list[Path]) -> QMimeData:
     if not image_paths:
@@ -805,7 +1010,8 @@ class ToolboxView(QWidget):
 
         hint = QLabel(
             "选择图片文件夹并输入编号，递归查找文件名中的编号，"
-            "支持格式：A10055、B10055、高10055、低10055、侧10055 或 Y-26100002-027-A。"
+            "支持格式：A10055、B10055、高10055、低10055、侧10055 或 Y-26100002-027-A；"
+            "输入完整 Y 标识时按批次和编号精确匹配，仅输入数字时跨批次搜索。"
         )
         hint.setStyleSheet("color: #666; font-size: 12px;")
         hint.setWordWrap(True)
@@ -823,13 +1029,77 @@ class ToolboxView(QWidget):
         folder_row.addWidget(self.image_search_folder_label, 1)
         tab_layout.addLayout(folder_row)
 
+        filter_hint = QLabel("批次/类别筛选（可选）：选择文件夹后自动扫描所有批次和类别，可添加多个条件，搜索结果将同时按编号和筛选条件过滤")
+        filter_hint.setStyleSheet("color: #909399; font-size: 11px;")
+        filter_hint.setWordWrap(True)
+        tab_layout.addWidget(filter_hint)
+
+        batch_filter_row = QHBoxLayout()
+        batch_filter_row.setSpacing(6)
+        batch_filter_row.addWidget(QLabel("批次:"))
+        self.batch_filter_combo = QComboBox()
+        self.batch_filter_combo.setMinimumWidth(140)
+        self.batch_filter_combo.setEnabled(False)
+        batch_filter_row.addWidget(self.batch_filter_combo)
+        self.add_batch_filter_btn = QPushButton("+ 添加批次")
+        self.add_batch_filter_btn.setStyleSheet(
+            "QPushButton { background-color: #409eff; color: white; padding: 3px 10px; "
+            "border-radius: 3px; font-size: 11px; }"
+            "QPushButton:hover { background-color: #66b1ff; }"
+            "QPushButton:disabled { background-color: #ccc; color: #fff; }"
+        )
+        self.add_batch_filter_btn.setEnabled(False)
+        self.add_batch_filter_btn.clicked.connect(self._add_batch_filter)
+        batch_filter_row.addWidget(self.add_batch_filter_btn)
+
+        self.selected_batches_label = QLabel("已选批次：无")
+        self.selected_batches_label.setStyleSheet(
+            "color: #606266; font-size: 11px; padding: 3px 6px; "
+            "background: #f5f7fa; border-radius: 3px;"
+        )
+        self.selected_batches_label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+        self.selected_batches_label.setWordWrap(True)
+        self.selected_batches_label.linkActivated.connect(self._remove_filter_item)
+        batch_filter_row.addWidget(self.selected_batches_label, 1)
+        tab_layout.addLayout(batch_filter_row)
+
+        cat_filter_row = QHBoxLayout()
+        cat_filter_row.setSpacing(6)
+        cat_filter_row.addWidget(QLabel("类别:"))
+        self.category_filter_combo = QComboBox()
+        self.category_filter_combo.setMinimumWidth(140)
+        self.category_filter_combo.setEnabled(False)
+        cat_filter_row.addWidget(self.category_filter_combo)
+        self.add_category_filter_btn = QPushButton("+ 添加类别")
+        self.add_category_filter_btn.setStyleSheet(
+            "QPushButton { background-color: #67c23a; color: white; padding: 3px 10px; "
+            "border-radius: 3px; font-size: 11px; }"
+            "QPushButton:hover { background-color: #85ce61; }"
+            "QPushButton:disabled { background-color: #ccc; color: #fff; }"
+        )
+        self.add_category_filter_btn.setEnabled(False)
+        self.add_category_filter_btn.clicked.connect(self._add_category_filter)
+        cat_filter_row.addWidget(self.add_category_filter_btn)
+
+        self.selected_categories_label = QLabel("已选类别：无")
+        self.selected_categories_label.setStyleSheet(
+            "color: #606266; font-size: 11px; padding: 3px 6px; "
+            "background: #f5f7fa; border-radius: 3px;"
+        )
+        self.selected_categories_label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+        self.selected_categories_label.setWordWrap(True)
+        self.selected_categories_label.linkActivated.connect(self._remove_filter_item)
+        cat_filter_row.addWidget(self.selected_categories_label, 1)
+        tab_layout.addLayout(cat_filter_row)
+
         search_row = QHBoxLayout()
         search_row.setSpacing(8)
         self.image_search_number = QTextEdit()
         self.image_search_number.setPlaceholderText(
-            "输入编号，支持批量（空格/换行/逗号分隔）\n"
-            "例如：10055 10056 10057\n"
-            "或：10055, 10056, 10057"
+            "输入编号或完整标识符，支持批量（空格/换行/逗号分隔）\n"
+            "例如：121 122 123\n"
+            "或：Y-26100002-121  Y-26100002-122\n"
+            "完整 Y 标识按批次和编号匹配；仅输入数字时跨批次搜索"
         )
         self.image_search_number.setFixedHeight(80)
         self.image_search_number.setStyleSheet(
@@ -903,6 +1173,16 @@ class ToolboxView(QWidget):
         self.image_search_result_count.setCursor(Qt.IBeamCursor)
         tab_layout.addWidget(self.image_search_result_count)
 
+        self.image_search_ng_list = QListWidget()
+        self.image_search_ng_list.setFixedHeight(120)
+        self.image_search_ng_list.setStyleSheet(
+            "QListWidget { border: 1px solid #f5c6cb; border-radius: 4px; background: #fff5f5; "
+            "font-size: 11px; color: #b71c1c; }"
+            "QListWidget::item { padding: 2px 6px; }"
+        )
+        self.image_search_ng_list.hide()
+        tab_layout.addWidget(self.image_search_ng_list)
+
         self.copy_not_found_button = QPushButton("复制未找到编号")
         self.copy_not_found_button.setEnabled(False)
         self.copy_not_found_button.setStyleSheet(
@@ -951,6 +1231,12 @@ class ToolboxView(QWidget):
         else:
             self._export_parent_dir = ""
 
+        self._filter_tree: dict[str, dict[str, list[str]]] = {}
+        self._selected_batches: set[str] = set()
+        self._selected_categories: set[str] = set()
+        if self.image_search_folder:
+            self._rebuild_filter_controls()
+
         tabs.addTab(tab, "图片编号查询")
 
     def _select_image_search_folder(self):
@@ -970,9 +1256,14 @@ class ToolboxView(QWidget):
         self.copy_images_button.setEnabled(False)
         self.copy_not_found_button.setEnabled(False)
         self.image_search_result_count.clear()
+        self.image_search_ng_list.clear()
+        self.image_search_ng_list.hide()
         self.image_search_preview.setText("输入编号后查询图片")
         self._current_search_matches = []
         self._not_found_identifiers = []
+        self._selected_batches.clear()
+        self._selected_categories.clear()
+        self._rebuild_filter_controls()
 
     def _parse_batch_identifiers(self, text: str) -> list[str]:
         raw = re.split(r"[\s,，;；]+", text.strip())
@@ -982,12 +1273,14 @@ class ToolboxView(QWidget):
             item = item.strip()
             if not item:
                 continue
-            if not item.isdigit():
+            y_query = _parse_y_search_query(item)
+            parsed = f"Y-{y_query[0]}-{y_query[1]}" if y_query else extract_query_identifier(item)
+            if not parsed:
                 continue
-            if item in seen:
+            if parsed in seen:
                 continue
-            seen.add(item)
-            result.append(item)
+            seen.add(parsed)
+            result.append(parsed)
         return result
 
     def _search_images(self):
@@ -1031,6 +1324,27 @@ class ToolboxView(QWidget):
                     if self._is_ng_path(p, folder_path):
                         ng_file_paths.append(p)
 
+        batch_filter = self._selected_batches
+        category_filter = self._selected_categories
+        if batch_filter or category_filter:
+            filtered_matches: list[Path] = []
+            filtered_path_to_identifier: dict[str, str] = {}
+            filtered_ng_paths: list[Path] = []
+            for p in all_matches:
+                b, c = extract_batch_category_from_path(p)
+                if batch_filter and b not in batch_filter:
+                    continue
+                if category_filter and c not in category_filter:
+                    continue
+                filtered_matches.append(p)
+                key = str(p).lower()
+                filtered_path_to_identifier[key] = path_to_identifier.get(key, "")
+                if self._is_ng_path(p, folder_path):
+                    filtered_ng_paths.append(p)
+            all_matches = filtered_matches
+            path_to_identifier = filtered_path_to_identifier
+            ng_file_paths = filtered_ng_paths
+
         not_found = [i for i in identifiers if i not in found_identifiers]
 
         self.image_search_results.clear()
@@ -1039,22 +1353,35 @@ class ToolboxView(QWidget):
             count_text = f"编号 {identifiers[0]}：找到 {len(all_matches)} 张匹配图片"
         else:
             count_text = f"共 {len(identifiers)} 个编号，找到 {len(all_matches)} 张匹配图片（已去重）"
+        filter_parts = []
+        if self._selected_batches:
+            filter_parts.append(f"批次=[{','.join(sorted(self._selected_batches))}]")
+        if self._selected_categories:
+            filter_parts.append(f"类别=[{','.join(sorted(self._selected_categories))}]")
+        if filter_parts:
+            count_text += "　筛选：" + " + ".join(filter_parts)
         if not_found:
             count_text += f"　未查到 {len(not_found)} 个：{' '.join(not_found)}"
         if errors:
             count_text += f"　⚠ {len(errors)} 个失败"
-        if ng_file_paths:
-            ng_names = sorted({html.escape(p.name) for p in ng_file_paths})
-            count_text += (
-                f'<br><span style="color:#c62828;font-weight:600;">⚠ NG 图片 '
-                f'（{len(ng_file_paths)} 张 / 编号 {" ".join(sorted(ng_identifiers, key=int))}）'
-                f'</span>'
-            )
-            count_text += f'<br><span style="color:#b71c1c;font-size:11px;">{"  ".join(ng_names[:20])}'
-            if len(ng_names) > 20:
-                count_text += f'　…等 {len(ng_names)} 个文件名'
-            count_text += '</span>'
         self.image_search_result_count.setText(count_text)
+
+        self.image_search_ng_list.clear()
+        if ng_file_paths:
+            ng_names = sorted({p.name for p in ng_file_paths})
+            header = QListWidgetItem(
+                f"⚠ NG 图片 {len(ng_file_paths)} 张 / 编号 {' '.join(sorted(ng_identifiers))}"
+            )
+            header.setFlags(Qt.NoItemFlags)
+            header.setForeground(QColor("#c62828"))
+            header.setBackground(QColor("#ffebee"))
+            self.image_search_ng_list.addItem(header)
+            for name in ng_names:
+                self.image_search_ng_list.addItem(QListWidgetItem(name))
+            self.image_search_ng_list.show()
+        else:
+            self.image_search_ng_list.hide()
+
         self.image_search_result_count.setTextFormat(Qt.RichText)
         self.copy_images_button.setEnabled(bool(all_matches))
         self.export_button.setEnabled(bool(all_matches) and bool(getattr(self, "_export_parent_dir", "")))
@@ -1067,7 +1394,8 @@ class ToolboxView(QWidget):
             path_str = str(path)
             key = path_str.lower()
             identifier = path_to_identifier.get(key, "")
-            highlighted = highlight_identifier_in_filename(path_str, identifier) if identifier else html.escape(path_str)
+            highlight_id = extract_query_identifier(identifier) if identifier else None
+            highlighted = highlight_identifier_in_filename(path_str, highlight_id) if highlight_id else html.escape(path_str)
             prefix = f'<span style="display:inline-block;background:#1a56db;color:white;border-radius:3px;padding:1px 6px;margin-right:6px;font-size:11px;">#{identifier}</span>' if identifier else ""
             item = QListWidgetItem()
             item.setData(Qt.UserRole, path_str)
@@ -1122,11 +1450,13 @@ class ToolboxView(QWidget):
             QMessageBox.critical(self, "创建失败", f"无法创建目录：{target_dir}\n{exc}")
             return
 
+        export_matches, dup_count = deduplicate_export_paths(matches)
+
         copied = 0
         skipped = 0
         errors = []
         root = search_root
-        for src in matches:
+        for src in export_matches:
             try:
                 rel = src.relative_to(root) if root and src.is_relative_to(root) else Path(src.name)
             except ValueError:
@@ -1150,8 +1480,10 @@ class ToolboxView(QWidget):
             f"",
             f"成功复制：{copied} 个",
             f"跳过已存在：{skipped} 个",
-            f"总数：{len(matches)} 个",
         ]
+        if dup_count:
+            msg_lines.append(f"复拍去重：{dup_count} 个（仅保留最后复拍）")
+        msg_lines.append(f"原始匹配：{len(matches)} 个 → 实际导出：{len(export_matches)} 个")
         if errors:
             msg_lines.append(f"失败：{len(errors)} 个")
             msg_lines.append("\n".join(errors[:5]))
@@ -1224,14 +1556,138 @@ class ToolboxView(QWidget):
         self.export_button.setEnabled(False)
         self.copy_not_found_button.setEnabled(False)
         self.image_search_result_count.clear()
+        self.image_search_ng_list.clear()
+        self.image_search_ng_list.hide()
         self.image_search_preview.setText("查询结果图片会在这里预览")
         self._current_search_matches = []
         self._not_found_identifiers = []
+        self._selected_batches.clear()
+        self._selected_categories.clear()
+        self.batch_filter_combo.blockSignals(True)
+        self.batch_filter_combo.clear()
+        self.batch_filter_combo.blockSignals(False)
+        self.category_filter_combo.blockSignals(True)
+        self.category_filter_combo.clear()
+        self.category_filter_combo.blockSignals(False)
+        self.batch_filter_combo.setEnabled(False)
+        self.category_filter_combo.setEnabled(False)
+        self.add_batch_filter_btn.setEnabled(False)
+        self.add_category_filter_btn.setEnabled(False)
+        self.selected_batches_label.setText("已选批次：无")
+        self.selected_categories_label.setText("已选类别：无")
         self.export_path_label.setText("尚未选择导出文件夹")
         self.export_path_label.setStyleSheet(
             "color: #606266; font-size: 11px; padding: 2px 4px; "
             "background: #f5f5f5; border-radius: 3px;"
         )
+
+    def _rebuild_filter_controls(self):
+        folder_path = getattr(self, "image_search_folder", "")
+        if not folder_path:
+            self._filter_tree = {}
+            self.batch_filter_combo.clear()
+            self.batch_filter_combo.setEnabled(False)
+            self.add_batch_filter_btn.setEnabled(False)
+            self.category_filter_combo.clear()
+            self.category_filter_combo.setEnabled(False)
+            self.add_category_filter_btn.setEnabled(False)
+            return
+
+        self._filter_tree = scan_batch_category_tree(folder_path)
+        batches = sorted(self._filter_tree.keys())
+
+        self.batch_filter_combo.blockSignals(True)
+        self.batch_filter_combo.clear()
+        self.batch_filter_combo.addItem("-- 选择批次 --")
+        self.batch_filter_combo.addItems(batches)
+        self.batch_filter_combo.setCurrentIndex(0)
+        self.batch_filter_combo.blockSignals(False)
+        has_batches = len(batches) > 0
+        self.batch_filter_combo.setEnabled(has_batches)
+        self.add_batch_filter_btn.setEnabled(has_batches)
+
+        categories: set[str] = set()
+        for cats in self._filter_tree.values():
+            categories.update(cats.keys())
+        cat_list = sorted(categories)
+
+        self.category_filter_combo.blockSignals(True)
+        self.category_filter_combo.clear()
+        self.category_filter_combo.addItem("-- 选择类别 --")
+        self.category_filter_combo.addItems(cat_list)
+        self.category_filter_combo.setCurrentIndex(0)
+        self.category_filter_combo.blockSignals(False)
+        has_cats = len(cat_list) > 0
+        self.category_filter_combo.setEnabled(has_cats)
+        self.add_category_filter_btn.setEnabled(has_cats)
+
+        self._update_selected_filters_display()
+
+    def _add_batch_filter(self):
+        batch = self.batch_filter_combo.currentText()
+        if not batch or batch.startswith("--"):
+            return
+        self._selected_batches.add(batch)
+        self.batch_filter_combo.setCurrentIndex(0)
+        self._update_selected_filters_display()
+
+    def _add_category_filter(self):
+        category = self.category_filter_combo.currentText()
+        if not category or category.startswith("--"):
+            return
+        self._selected_categories.add(category)
+        self.category_filter_combo.setCurrentIndex(0)
+        self._update_selected_filters_display()
+
+    def _update_selected_filters_display(self):
+        if self._selected_batches:
+            items = sorted(self._selected_batches)
+            html_parts = []
+            for b in items:
+                html_parts.append(
+                    f'<span style="display:inline-block;background:#ecf5ff;color:#409eff;'
+                    f'border:1px solid #b3d8ff;border-radius:3px;padding:1px 6px;margin:1px 3px 1px 0px;'
+                    f'font-size:11px;">{b} <a style="color:#f56c6c;text-decoration:none;'
+                    f'cursor:pointer;" href="batch:{b}">✕</a></span>'
+                )
+            self.selected_batches_label.setText(
+                "已选批次：" + "".join(html_parts) + f' <a href="batch:__clear__" '
+                f'style="color:#909399;font-size:10px;text-decoration:none;">全部清除</a>'
+            )
+        else:
+            self.selected_batches_label.setText("已选批次：无")
+
+        if self._selected_categories:
+            items = sorted(self._selected_categories)
+            html_parts = []
+            for c in items:
+                html_parts.append(
+                    f'<span style="display:inline-block;background:#f0f9eb;color:#67c23a;'
+                    f'border:1px solid #c2e7b0;border-radius:3px;padding:1px 6px;margin:1px 3px 1px 0px;'
+                    f'font-size:11px;">{c} <a style="color:#f56c6c;text-decoration:none;'
+                    f'cursor:pointer;" href="category:{c}">✕</a></span>'
+                )
+            self.selected_categories_label.setText(
+                "已选类别：" + "".join(html_parts) + f' <a href="category:__clear__" '
+                f'style="color:#909399;font-size:10px;text-decoration:none;">全部清除</a>'
+            )
+        else:
+            self.selected_categories_label.setText("已选类别：无")
+
+    def _remove_filter_item(self, link: str):
+        if link.startswith("batch:"):
+            item = link[6:]
+            if item == "__clear__":
+                self._selected_batches.clear()
+            else:
+                self._selected_batches.discard(item)
+        elif link.startswith("category:"):
+            item = link[9:]
+            if item == "__clear__":
+                self._selected_categories.clear()
+            else:
+                self._selected_categories.discard(item)
+        self._update_selected_filters_display()
 
     # ------------------------------------------------------------------
     # 良品 / NG 统计
@@ -1247,7 +1703,7 @@ class ToolboxView(QWidget):
             "选择需统计文件夹：根目录直接存放良品图，子文件夹NG存放NG图。\n"
             "支持同时选择多个文件夹合并统计；同一批次编号跨文件夹会自动合并。\n"
             "支持文件名格式：高1、低1、侧1、A1、B1、Y-26100002-027-A（编号027，A面）、\n"
-            "以及 T 开头格式：T-NO-A165-20261108-Result=NG_mark.png（T 后面为类别）。"
+            "以及 T-20261113-高1-L背面精加-R1（类别为 L背面精加，R1 复拍标记可选）和旧版 T 开头格式。"
         )
         hint.setStyleSheet("color: #666; font-size: 12px;")
         hint.setWordWrap(True)
@@ -1342,7 +1798,26 @@ class ToolboxView(QWidget):
             "QComboBox { padding: 4px; border: 1px solid #ddd; border-radius: 4px; }"
         )
         batch_row.addWidget(self.batch_filter)
-        batch_row.addWidget(QLabel("（默认统计所有批次）"))
+        batch_row.addWidget(QLabel("类别："))
+        self.stats_category_filter = QComboBox()
+        self.stats_category_filter.addItem("全部类别", "")
+        self.stats_category_filter.setMinimumWidth(140)
+        self.stats_category_filter.setStyleSheet(
+            "QComboBox { padding: 4px; border: 1px solid #ddd; border-radius: 4px; }"
+        )
+        self.stats_category_filter.currentIndexChanged.connect(
+            self._refresh_ng_stats_product_filter
+        )
+        batch_row.addWidget(self.stats_category_filter)
+        batch_row.addWidget(QLabel("产品编号："))
+        self.stats_product_filter = QComboBox()
+        self.stats_product_filter.addItem("全部编号", "")
+        self.stats_product_filter.setMinimumWidth(100)
+        self.stats_product_filter.setStyleSheet(
+            "QComboBox { padding: 4px; border: 1px solid #ddd; border-radius: 4px; }"
+        )
+        batch_row.addWidget(self.stats_product_filter)
+        batch_row.addWidget(QLabel("（点击统计应用筛选）"))
         batch_row.addStretch()
         tab_layout.addLayout(batch_row)
 
@@ -1424,6 +1899,10 @@ class ToolboxView(QWidget):
         )
         tab_layout.addWidget(self.ng_detail_table, 3)
 
+        self._stats_category_products: dict[tuple[str, str, str], set[str]] = {}
+        self.batch_filter.currentIndexChanged.connect(
+            self._refresh_ng_stats_category_filter
+        )
         tabs.addTab(tab, "良品/NG统计")
         self._load_saved_ng_folders()
 
@@ -1518,19 +1997,15 @@ class ToolboxView(QWidget):
         name_without_ext = os.path.splitext(name)[0]
         y_match = Y_PATTERN.search(name)
         if y_match:
-            return int(y_match.group(2))
+            _, pid, _ = _parse_y_match(y_match)
+            return int(pid)
         t_match = T_PATTERN.match(name_without_ext)
         if t_match:
-            side_num = T_SIDE_NUMBER_PATTERN.search(name_without_ext)
-            if side_num:
-                return int(side_num.group(2))
-            for m in _STANDALONE_NUMBER_RE.finditer(name_without_ext):
-                if not _DATE8_RE.fullmatch(m.group(1)):
-                    return int(m.group(1))
-            return None
+            identifier_and_category = _t_identifier_and_category(name_without_ext)
+            return int(identifier_and_category[0]) if identifier_and_category else None
         side_match = _SIDE_NUMBER_RE.search(name)
         if side_match:
-            return int(side_match.group(1))
+            return int(side_match.group(2))
         for m in _STANDALONE_NUMBER_RE.finditer(name):
             if not _DATE8_RE.fullmatch(m.group(1)):
                 return int(m.group(1))
@@ -1579,10 +2054,11 @@ class ToolboxView(QWidget):
         latest_date = self._extract_batch_date(latest_batch)
 
         max_pid = None
-        for name in batch_files[latest_batch]:
-            pid = self._pid_from_filename(name)
-            if pid is not None and (max_pid is None or pid > max_pid):
-                max_pid = pid
+        for names in batch_files.values():
+            for name in names:
+                pid = self._pid_from_filename(name)
+                if pid is not None and (max_pid is None or pid > max_pid):
+                    max_pid = pid
 
         return latest_date or None, max_pid
 
@@ -1599,8 +2075,9 @@ class ToolboxView(QWidget):
                 product_best[product] = (latest_date, max_pid)
             else:
                 prev_date, prev_pid = prev
-                if (latest_date or "") >= (prev_date or ""):
-                    product_best[product] = (latest_date, max_pid)
+                best_date = (latest_date or "") >= (prev_date or "") and latest_date or prev_date
+                best_pid = max(prev_pid, max_pid)
+                product_best[product] = (best_date, best_pid)
 
         if not product_best:
             self._product_max_label.setText("")
@@ -1636,6 +2113,7 @@ class ToolboxView(QWidget):
         all_ng_ids_by_batch: dict[str, set[str]] = {}
         pid_ctimes: dict[str, list[float]] = {}
         batch_ctimes: dict[str, list[float]] = {}
+        ok_filenames = []
         ng_defect_filenames = []
         stray_ng_filenames: list[tuple[str, str]] = []
         invalid_entries: list[tuple[str, str]] = []
@@ -1680,6 +2158,7 @@ class ToolboxView(QWidget):
                             ng_defect_filenames.append(name)
                         else:
                             all_ok_ids_by_batch.setdefault(batch, set()).add(pid_str)
+                            ok_filenames.append(name)
         except OSError as exc:
             QMessageBox.critical(self, "读取失败", f"读取文件夹失败：{exc}")
             return
@@ -1721,6 +2200,23 @@ class ToolboxView(QWidget):
                     continue
                 ng_ids_by_batch.setdefault(batch, set()).add(pid_str)
 
+        ok_category_ids = extract_ng_defect_category_ids(ok_filenames)
+        ng_category_ids = extract_ng_defect_category_ids(ng_defect_filenames)
+        self._stats_category_products = {}
+        for category_ids, status_ids_by_batch in (
+            (ok_category_ids, ok_ids_by_batch),
+            (ng_category_ids, ng_ids_by_batch),
+        ):
+            for batch, cats in category_ids.items():
+                valid_ids = status_ids_by_batch.get(batch, set())
+                for category, sides in cats.items():
+                    for side, pids in sides.items():
+                        matching = pids & valid_ids
+                        if matching:
+                            self._stats_category_products.setdefault(
+                                (batch, category, side), set()
+                            ).update(matching)
+
         available_batches = sorted(set(ok_ids_by_batch.keys()) | set(ng_ids_by_batch.keys()))
         selected_batch = self.batch_filter.currentData()
         if selected_batch not in available_batches:
@@ -1735,18 +2231,42 @@ class ToolboxView(QWidget):
             self.batch_filter.findData(selected_batch)
         )
         self.batch_filter.blockSignals(False)
+        self._refresh_ng_stats_category_filter()
+        selected_category = self.stats_category_filter.currentData() or ""
+        selected_product = self.stats_product_filter.currentData() or ""
 
         batches = (
             [selected_batch]
             if selected_batch
             else available_batches
         )
+
+        def category_filtered_ids(
+            category_ids: dict[str, dict[str, dict[str, set[str]]]],
+            batch: str,
+        ) -> set[str]:
+            matching_ids: set[str] = set()
+            for cat_batch, cats in category_ids.items():
+                if cat_batch != batch:
+                    continue
+                for category, sides in cats.items():
+                    if selected_category and category != selected_category:
+                        continue
+                    for side, pids in sides.items():
+                        matching_ids.update(pids)
+            if selected_product:
+                matching_ids.intersection_update({selected_product})
+            return matching_ids
+
         batch_stats = {}
         final_ok_all = set()
         final_ng_all = set()
         for batch in batches:
             ok_set = ok_ids_by_batch.get(batch, set())
             ng_set = ng_ids_by_batch.get(batch, set())
+            if selected_category or selected_product:
+                ok_set = ok_set & category_filtered_ids(ok_category_ids, batch)
+                ng_set = ng_set & category_filtered_ids(ng_category_ids, batch)
             final_ok = sorted(ok_set - ng_set, key=int)
             final_ng = sorted(ng_set, key=int)
             batch_stats[batch] = (final_ok, final_ng)
@@ -1754,16 +2274,40 @@ class ToolboxView(QWidget):
             final_ng_all.update(final_ng)
 
         total = len(final_ok_all) + len(final_ng_all)
-        defect_ids_by_category = filter_ng_defect_category_ids(
-            extract_ng_defect_category_ids(ng_defect_filenames),
+
+        def filter_category_products(
+            category_ids: dict[str, dict[str, dict[str, set[str]]]],
+            valid_ids_by_batch: dict[str, set[str]],
+        ) -> dict[tuple[str, str, str], set[str]]:
+            filtered: dict[tuple[str, str, str], set[str]] = {}
+            for batch, cats in category_ids.items():
+                if selected_batch and batch != selected_batch:
+                    continue
+                batch_valid = valid_ids_by_batch.get(batch, set())
+                for category, sides in cats.items():
+                    if selected_category and category != selected_category:
+                        continue
+                    for side, pids in sides.items():
+                        matching = pids & batch_valid
+                        if selected_product:
+                            matching &= {selected_product}
+                        if matching:
+                            filtered[(batch, category, side)] = matching
+            return filtered
+
+        good_ids_by_batch = {
+            batch: ids - ng_ids_by_batch.get(batch, set())
+            for batch, ids in ok_ids_by_batch.items()
+        }
+        good_products_by_category = filter_category_products(
+            ok_category_ids,
+            good_ids_by_batch,
+        )
+        ng_products_by_category = filter_category_products(
+            ng_category_ids,
             ng_ids_by_batch,
         )
-        if selected_batch:
-            defect_ids_by_category = {
-                key: ids
-                for key, ids in defect_ids_by_category.items()
-                if key[0] == selected_batch
-            }
+        defect_ids_by_category = ng_products_by_category
 
         table_lines = [
             "<table border='0' cellspacing='12' cellpadding='0' width='100%' "
@@ -1783,10 +2327,11 @@ class ToolboxView(QWidget):
                 time_range = f"<br><span style='font-size:12px;color:#666;'>创建时间 {_fmt_ctime(t_min)} ~ {_fmt_ctime(t_max)}</span>"
             else:
                 time_range = ""
+            ng_rate_all = len(final_ng_all) / total * 100 if total else 0
             table_lines.append(
                 f"<table style='border-collapse:collapse;width:100%;margin-bottom:8px;background:#fafafa;border:1px solid #e0e0e0;'>"
                 f"<tr><td colspan='2' style='height:32px;padding:6px;text-align:center;font-size:14px;font-weight:bold;color:#303133;'>"
-                f"汇总　|　总计 {total} 个　|　良品 {len(final_ok_all)}　|　NG {len(final_ng_all)}"
+                f"汇总　|　总计 {total} 个　|　良品 {len(final_ok_all)}　|　NG {len(final_ng_all)}　|　不良率 {ng_rate_all:.2f}%"
                 f"{time_range}</td></tr></table>"
             )
 
@@ -1804,11 +2349,12 @@ class ToolboxView(QWidget):
                 else:
                     batch_time = f"<br><span style='font-size:12px;color:#666;'>创建时间 {_fmt_ctime(t_min)} ~ {_fmt_ctime(t_max)}</span>"
 
+            batch_rate = len(final_ng) / batch_total * 100 if batch_total else 0
             table_lines.append("<table style='border-collapse:collapse;width:100%;margin-bottom:8px;'>")
             table_lines.append(
                 f"<tr><td colspan='2' style='height:32px;padding:6px;text-align:center;font-size:14px;font-weight:bold;"
                 f"background:#f0f4ff;color:#1a56db;border:1px solid #c7d7f5;'>"
-                f"批次 {batch}　|　总计 {batch_total} 个　|　良品 {len(final_ok)}　|　NG {len(final_ng)}"
+                f"批次 {batch}　|　总计 {batch_total} 个　|　良品 {len(final_ok)}　|　NG {len(final_ng)}　|　不良率 {batch_rate:.2f}%"
                 f"{batch_time}</td></tr>"
             )
             table_lines.append(
@@ -1833,60 +2379,101 @@ class ToolboxView(QWidget):
             "<table style='border-collapse:collapse;width:100%;margin-left:-80px;'>"
         )
         table_lines.append(
-            "<tr><th colspan='3' style='border:1px solid #ccc;padding:8px;text-align:center;"
+            "<tr><th colspan='4' style='border:1px solid #ccc;padding:8px;text-align:center;"
             "background:#f5f7fa;color:#303133;font-size:15px;'>NG 不良明细</th></tr>"
         )
         table_lines.append(
             "<tr>"
-            "<th style='border:1px solid #ccc;padding:6px;text-align:center;background:#f5f7fa;'>批次 / 不良类别</th>"
+            "<th style='border:1px solid #ccc;padding:6px;text-align:center;background:#f5f7fa;'>批次 / 类别</th>"
+            "<th style='border:1px solid #ccc;padding:6px;text-align:center;background:#f5f7fa;width:50px;'>面</th>"
             "<th style='border:1px solid #ccc;padding:6px;text-align:center;background:#f5f7fa;'>数量 / 不良率</th>"
             "<th style='border:1px solid #ccc;padding:6px;text-align:center;background:#f5f7fa;'>对应 NG 编号</th>"
             "</tr>"
         )
-        category_order = ("高", "低", "侧", "A", "B", "C")
+        side_order = ("高", "低", "侧", "A", "B", "C", "左", "右", "-")
+
+        def _sort_sides(sides: set[str]) -> list[str]:
+            return sorted(sides, key=lambda s: (side_order.index(s) if s in side_order else 99, s))
+
+        ng_grouped: dict[tuple[str, str], dict[str, set[str]]] = {}
+        for (batch, category, side), pids in defect_ids_by_category.items():
+            ng_grouped.setdefault((batch, category), {})[side] = pids
+
         for batch in batches:
-            batch_has_rows = False
-            seen_categories = set()
-            for category in category_order:
-                category_ids = defect_ids_by_category.get((batch, category))
-                if not category_ids:
-                    continue
-                seen_categories.add(category)
-                batch_has_rows = True
-                category_count = len(category_ids)
-                batch_total = len(batch_stats[batch][0]) + len(batch_stats[batch][1])
-                rate = category_count / batch_total * 100 if batch_total else 0
-                identifiers = "、".join(sorted(category_ids, key=int))
-                table_lines.append(
-                    "<tr>"
-                    f"<td style='border:1px solid #ccc;padding:6px;text-align:center;font-weight:bold;'>{batch} / {category}</td>"
-                    f"<td style='border:1px solid #ccc;padding:6px;text-align:center;color:#c62828;'>"
-                    f"{category_count} 个 / {rate:.2f}%</td>"
-                    f"<td style='border:1px solid #ccc;padding:6px;text-align:left;color:#c62828;'>{identifiers}</td>"
-                    "</tr>"
-                )
-            extra_categories = sorted(
-                cat for (b, cat) in defect_ids_by_category if b == batch and cat not in seen_categories
-            )
-            for category in extra_categories:
-                category_ids = defect_ids_by_category[(batch, category)]
-                batch_has_rows = True
-                category_count = len(category_ids)
-                batch_total = len(batch_stats[batch][0]) + len(batch_stats[batch][1])
-                rate = category_count / batch_total * 100 if batch_total else 0
-                identifiers = "、".join(sorted(category_ids, key=int))
-                table_lines.append(
-                    "<tr>"
-                    f"<td style='border:1px solid #ccc;padding:6px;text-align:center;font-weight:bold;'>{batch} / {html.escape(category)}</td>"
-                    f"<td style='border:1px solid #ccc;padding:6px;text-align:center;color:#c62828;'>"
-                    f"{category_count} 个 / {rate:.2f}%</td>"
-                    f"<td style='border:1px solid #ccc;padding:6px;text-align:left;color:#c62828;'>{identifiers}</td>"
-                    "</tr>"
-                )
+            batch_total = len(batch_stats[batch][0]) + len(batch_stats[batch][1])
+            batch_groups = {
+                k: v for k, v in ng_grouped.items() if k[0] == batch
+            }
+            if not batch_groups:
+                continue
+            for (b, category), side_map in sorted(batch_groups.items()):
+                sorted_sides = _sort_sides(set(side_map.keys()))
+                rowspan = len(sorted_sides)
+                for idx, side in enumerate(sorted_sides):
+                    pids = side_map[side]
+                    count = len(pids)
+                    rate = count / batch_total * 100 if batch_total else 0
+                    identifiers = "、".join(sorted(pids, key=int))
+                    table_lines.append("<tr>")
+                    if idx == 0:
+                        table_lines.append(
+                            f"<td rowspan='{rowspan}' style='border:1px solid #ccc;padding:6px;"
+                            f"text-align:center;font-weight:bold;vertical-align:middle;'>"
+                            f"{batch} / {html.escape(category)}</td>"
+                        )
+                    table_lines.append(
+                        f"<td style='border:1px solid #ccc;padding:6px;text-align:center;'>{side}</td>"
+                        f"<td style='border:1px solid #ccc;padding:6px;text-align:center;color:#c62828;'>"
+                        f"{count} 个 / {rate:.2f}%</td>"
+                        f"<td style='border:1px solid #ccc;padding:6px;text-align:left;color:#c62828;'>{identifiers}</td>"
+                    )
+                    table_lines.append("</tr>")
         if not defect_ids_by_category:
             table_lines.append(
-                "<tr><td colspan='3' style='border:1px solid #ccc;padding:8px;text-align:center;color:#909399;'>"
+                "<tr><td colspan='4' style='border:1px solid #ccc;padding:8px;text-align:center;color:#909399;'>"
                 "未识别到带类别前缀的 NG 编号</td></tr>"
+            )
+        table_lines.append(
+            "</table>"
+            "<table style='border-collapse:collapse;width:100%;margin-top:12px;margin-left:-80px;'>"
+            "<tr><th colspan='4' style='border:1px solid #ccc;padding:8px;text-align:center;"
+            "background:#f5f7fa;color:#303133;font-size:15px;'>批次 / 类别产品明细</th></tr>"
+            "<tr>"
+            "<th style='border:1px solid #ccc;padding:6px;text-align:center;background:#f5f7fa;'>批次 / 类别</th>"
+            "<th style='border:1px solid #ccc;padding:6px;text-align:center;background:#f5f7fa;width:50px;'>面</th>"
+            "<th style='border:1px solid #ccc;padding:6px;text-align:center;background:#e8f5e9;color:#2e7d32;'>良品编号</th>"
+            "<th style='border:1px solid #ccc;padding:6px;text-align:center;background:#ffebee;color:#c62828;'>NG 编号</th>"
+            "</tr>"
+        )
+        all_product_keys = set(good_products_by_category) | set(ng_products_by_category)
+        product_grouped: dict[tuple[str, str], set[str]] = {}
+        for (batch, category, side) in all_product_keys:
+            product_grouped.setdefault((batch, category), set()).add(side)
+        for (batch, category), sides in sorted(product_grouped.items()):
+            sorted_sides = _sort_sides(sides)
+            rowspan = len(sorted_sides)
+            for idx, side in enumerate(sorted_sides):
+                good_ids = good_products_by_category.get((batch, category, side), set())
+                ng_ids = ng_products_by_category.get((batch, category, side), set())
+                good_str = "、".join(sorted(good_ids, key=int))
+                ng_str = "、".join(sorted(ng_ids, key=int))
+                table_lines.append("<tr>")
+                if idx == 0:
+                    table_lines.append(
+                        f"<td rowspan='{rowspan}' style='border:1px solid #ccc;padding:6px;"
+                        f"text-align:center;font-weight:bold;vertical-align:middle;'>"
+                        f"{html.escape(batch)} / {html.escape(category)}</td>"
+                    )
+                table_lines.append(
+                    f"<td style='border:1px solid #ccc;padding:6px;text-align:center;'>{side}</td>"
+                    f"<td style='border:1px solid #ccc;padding:6px;text-align:center;color:#2e7d32;'>{good_str}</td>"
+                    f"<td style='border:1px solid #ccc;padding:6px;text-align:center;color:#c62828;'>{ng_str}</td>"
+                )
+                table_lines.append("</tr>")
+        if not all_product_keys:
+            table_lines.append(
+                "<tr><td colspan='4' style='border:1px solid #ccc;padding:8px;text-align:center;color:#909399;'>"
+                "当前筛选条件下没有已分类产品</td></tr>"
             )
         ng_rate = len(final_ng_all) / total * 100 if total else 0
         table_lines.append(
@@ -1956,8 +2543,50 @@ class ToolboxView(QWidget):
         self.date_end_label.setStyleSheet("color: #666; min-width: 130px;")
 
     def _reset_ng_batch_filter(self):
+        self._stats_category_products = {}
         self.batch_filter.clear()
         self.batch_filter.addItem("全部批次", "")
+        self._refresh_ng_stats_category_filter()
+
+    def _refresh_ng_stats_category_filter(self, *_):
+        selected_category = self.stats_category_filter.currentData() or ""
+        batch = self.batch_filter.currentData() or ""
+        categories = sorted({
+            category
+            for item_batch, category, _side in self._stats_category_products
+            if not batch or item_batch == batch
+        })
+
+        self.stats_category_filter.blockSignals(True)
+        self.stats_category_filter.clear()
+        self.stats_category_filter.addItem("全部类别", "")
+        for category in categories:
+            self.stats_category_filter.addItem(category, category)
+        category_index = self.stats_category_filter.findData(selected_category)
+        self.stats_category_filter.setCurrentIndex(max(category_index, 0))
+        self.stats_category_filter.blockSignals(False)
+        self._refresh_ng_stats_product_filter()
+
+    def _refresh_ng_stats_product_filter(self, *_):
+        selected_product = self.stats_product_filter.currentData() or ""
+        batch = self.batch_filter.currentData() or ""
+        category = self.stats_category_filter.currentData() or ""
+        products: set[str] = set()
+        for (item_batch, item_category, _side), ids in self._stats_category_products.items():
+            if batch and item_batch != batch:
+                continue
+            if category and item_category != category:
+                continue
+            products.update(ids)
+
+        self.stats_product_filter.blockSignals(True)
+        self.stats_product_filter.clear()
+        self.stats_product_filter.addItem("全部编号", "")
+        for product_id in sorted(products, key=int):
+            self.stats_product_filter.addItem(product_id, product_id)
+        product_index = self.stats_product_filter.findData(selected_product)
+        self.stats_product_filter.setCurrentIndex(max(product_index, 0))
+        self.stats_product_filter.blockSignals(False)
 
     def _clear_ng_stats(self):
         self.ng_folder_list.clear()

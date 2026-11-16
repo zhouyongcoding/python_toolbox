@@ -1,0 +1,37 @@
+4\\Lib\\site-packages\\PyInstaller\\hooks'
+33180 INFO: Performing binary vs. data reclassification (126 entries)
+33196 INFO: Looking for ctypes DLLs
+33216 INFO: Analyzing run-time hooks ...
+33217 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+33220 INFO: Including run-time hook 'pyi_rth_pyside6.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+33221 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+33223 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+33226 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+33227 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+33228 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+33236 INFO: Creating base_library.zip...
+33248 INFO: Looking for dynamic libraries
+33716 INFO: Extra DLL search directories (AddDllDirectory): ['C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\shiboken6']
+33716 INFO: Extra DLL search directories (PATH): ['C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PySide6']
+34252 INFO: Warnings written to D:\my_python_project\python_toolbox\build\PythonToolbox\warn-PythonToolbox.txt
+34281 INFO: Graph cross-reference written to D:\my_python_project\python_toolbox\build\PythonToolbox\xref-PythonToolbox.html
+34300 INFO: checking PYZ
+34317 INFO: checking PKG
+34329 INFO: Building because toc changed
+34329 INFO: Building PKG (CArchive) PythonToolbox.pkg
+38471 INFO: Building PKG (CArchive) PythonToolbox.pkg completed successfully.
+38474 INFO: Bootloader C:\Users\lenovo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+38474 INFO: checking EXE
+38492 INFO: Building because toc changed
+38492 INFO: Building EXE from EXE-00.toc
+38496 INFO: Copying bootloader EXE to D:\my_python_project\python_toolbox\dist\PythonToolbox.exe
+38541 INFO: Copying icon to EXE
+38580 INFO: Copying 0 resources to EXE
+38580 INFO: Embedding manifest in EXE
+38621 INFO: Appending PKG archive to EXE
+38707 INFO: Fixing EXE headers
+39448 INFO: Building EXE from EXE-00.toc completed successfully.
+39450 INFO: Build complete! The results are available in: D:\my_python_project\python_toolbox\dist
+
+---EXE SIZE---
+51015918

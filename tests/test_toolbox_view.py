@@ -15,6 +15,7 @@ from app.ui.toolbox_view import (
     find_images_by_identifier,
     highlight_identifier_in_filename,
     read_filenames_from_folder,
+    scan_batch_category_tree,
 )
 
 
@@ -120,6 +121,23 @@ class ScanIdentifierTests(unittest.TestCase):
             },
         )
 
+    def test_t_format_detail_uses_product_number_after_date_for_range_filter(self):
+        category_ids = extract_ng_defect_category_ids([
+            "T-UNKNOWN-20261108-12345-Result=NG_mark.png",
+        ])
+
+        filtered_ids = filter_ng_defect_category_ids(
+            category_ids,
+            {"UNKNOWN": {"12345"}},
+        )
+
+        self.assertEqual(
+            filtered_ids,
+            {
+                ("UNKNOWN", "未分类"): {"12345"},
+            },
+        )
+
     def test_t_format_with_underscore_separator(self):
         category_ids = extract_ng_defect_category_ids([
             "T_NO_A001_20261108.png",
@@ -129,6 +147,38 @@ class ScanIdentifierTests(unittest.TestCase):
             category_ids,
             {
                 ("NO", "A"): {"1"},
+            },
+        )
+
+    def test_new_t_format_keeps_full_category_and_excludes_retake_suffix(self):
+        filenames = [
+            "T-20261113-高1-L背面精加-R1.png",
+            "T-20261113-高2-L背面精加.png",
+            "T-20261113-高3.png",
+        ]
+
+        self.assertEqual(
+            extract_ng_defect_category_ids(filenames),
+            {
+                ("20261113", "L背面精加"): {"1", "2"},
+                ("20261113", "未分类"): {"3"},
+            },
+        )
+
+    def test_new_t_format_populates_batch_category_product_tree(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "T-20261113-高1-L背面精加-R1.png").touch()
+            (root / "T-20261113-高2-L背面精加.png").touch()
+            (root / "T-20261114-高3-R1.png").touch()
+
+            tree = scan_batch_category_tree(temp_dir)
+
+        self.assertEqual(
+            tree,
+            {
+                "20261113": {"L背面精加": ["1", "2"]},
+                "20261114": {"未分类": ["3"]},
             },
         )
 
@@ -165,6 +215,56 @@ class ScanIdentifierTests(unittest.TestCase):
                 "10055.png",
                 "低010055.webp",
             },
+        )
+
+    def test_full_y_query_matches_exact_batch_and_number(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            filenames = (
+                "Y-26100002-121-A.png",
+                "Y-26100002-1210.png",
+                "Y-26100003-121.png",
+                "T-26100002-高121-L背面精加-R1.png",
+                "T-26100003-高121.png",
+                "高121-L背面精加-R1.png",
+            )
+            for filename in filenames:
+                (root / filename).touch()
+
+            matches = find_images_by_identifier(temp_dir, "Y-26100002-121")
+
+        self.assertEqual(
+            {path.name for path in matches},
+            {
+                "Y-26100002-121-A.png",
+                "T-26100002-高121-L背面精加-R1.png",
+            },
+        )
+
+    def test_numeric_query_supports_new_t_and_legacy_names(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            filenames = (
+                "T-20261113-高1-L背面精加-R1.png",
+                "高1-L背面精加-R1.png",
+                "T-20261113-高10.png",
+            )
+            for filename in filenames:
+                (root / filename).touch()
+
+            matches = find_images_by_identifier(temp_dir, "1")
+            batch_matches = find_images_by_identifier(temp_dir, "Y-20261113-1")
+
+        self.assertEqual(
+            {path.name for path in matches},
+            {
+                "T-20261113-高1-L背面精加-R1.png",
+                "高1-L背面精加-R1.png",
+            },
+        )
+        self.assertEqual(
+            {path.name for path in batch_matches},
+            {"T-20261113-高1-L背面精加-R1.png"},
         )
 
     def test_rejects_non_numeric_image_search_identifier(self):

@@ -1,0 +1,96 @@
+118 INFO: PyInstaller: 6.22.3, contrib hooks: 2026.9
+119 INFO: Python: 3.14.6
+141 INFO: Platform: Windows-11-10.0.26200-SP0
+141 INFO: Python environment: C:\Users\lenovo\AppData\Local\Python\pythoncore-3.14-64
+143 INFO: Removing temporary files and cleaning cache in C:\Users\lenovo\AppData\Local\pyinstaller
+149 INFO: Module search paths (PYTHONPATH):
+['D:\\my_python_project\\python_toolbox',
+ 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\python314.zip',
+ 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\DLLs',
+ 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib',
+ 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64',
+ 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages',
+ 'D:\\my_python_project\\python_toolbox']
+390 INFO: checking Analysis
+390 INFO: Building Analysis because Analysis-00.toc is non existent
+390 INFO: Looking for Python shared library...
+390 INFO: Using Python shared library: C:\Users\lenovo\AppData\Local\Python\pythoncore-3.14-64\python314.dll
+390 INFO: Running Analysis Analysis-00.toc
+390 INFO: Target bytecode optimization level: 0
+391 INFO: Initializing module dependency graph...
+392 INFO: Initializing module graph hook caches...
+401 INFO: Analyzing modules for base_library.zip ...
+1688 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+2113 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+2318 INFO: Processing standard module hook 'hook-math.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+2426 INFO: Processing standard module hook 'hook-difflib.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+2439 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+4328 INFO: Caching module dependency graph...
+4349 INFO: Analyzing D:\my_python_project\python_toolbox\run_toolbox.py
+4354 INFO: Processing standard module hook 'hook-PySide6.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+4486 INFO: Processing standard module hook 'hook-shiboken6.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+4719 INFO: Processing standard module hook 'hook-PySide6.QtNetwork.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+6575 INFO: Processing standard module hook 'hook-PySide6.QtCore.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+9173 INFO: Processing standard module hook 'hook-PySide6.QtWidgets.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+12212 INFO: Processing standard module hook 'hook-PySide6.QtGui.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+29290 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+29361 INFO: Processing standard module hook 'hook-xml.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+29582 INFO: Processing standard module hook 'hook-sysconfig.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+29587 INFO: Processing standard module hook 'hook-_ctypes.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+30123 INFO: Processing standard module hook 'hook-platform.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+30133 INFO: Processing standard module hook 'hook-urllib3.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+30229 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+30232 INFO: SetuptoolsInfo: initializing cached setuptools info...
+30652 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+30658 INFO: Processing standard module hook 'hook-setuptools.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+30670 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+30695 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+30696 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+30704 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+30705 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.more_itertools'!
+30817 INFO: Processing standard module hook 'hook-_osx_support.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+30821 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+30933 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+31169 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+31170 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+31628 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+31629 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+32148 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+32149 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+32506 INFO: Processing standard module hook 'hook-certifi.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+32541 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+32697 INFO: Processing module hooks (post-graph stage)...
+32896 INFO: Processing standard module hook 'hook-webbrowser.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+33180 INFO: Performing binary vs. data reclassification (126 entries)
+33196 INFO: Looking for ctypes DLLs
+33216 INFO: Analyzing run-time hooks ...
+33217 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+33220 INFO: Including run-time hook 'pyi_rth_pyside6.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+33221 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+33223 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+33226 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+33227 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+33228 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+33236 INFO: Creating base_library.zip...
+33248 INFO: Looking for dynamic libraries
+33716 INFO: Extra DLL search directories (AddDllDirectory): ['C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\shiboken6']
+33716 INFO: Extra DLL search directories (PATH): ['C:\\Users\\lenovo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PySide6']
+34252 INFO: Warnings written to D:\my_python_project\python_toolbox\build\PythonToolbox\warn-PythonToolbox.txt
+34281 INFO: Graph cross-reference written to D:\my_python_project\python_toolbox\build\PythonToolbox\xref-PythonToolbox.html
+34300 INFO: checking PYZ
+34317 INFO: checking PKG
+34329 INFO: Building because toc changed
+34329 INFO: Building PKG (CArchive) PythonToolbox.pkg
+38471 INFO: Building PKG (CArchive) PythonToolbox.pkg completed successfully.
+38474 INFO: Bootloader C:\Users\lenovo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+38474 INFO: checking EXE
+38492 INFO: Building because toc changed
+38492 INFO: Building EXE from EXE-00.toc
+38496 INFO: Copying bootloader EXE to D:\my_python_project\python_toolbox\dist\PythonToolbox.exe
+38541 INFO: Copying icon to EXE
+38580 INFO: Copying 0 resources to EXE
+38580 INFO: Embedding manifest in EXE
+38621 INFO: Appending PKG archive to EXE
+38707 INFO: Fixing EXE headers
+39448 INFO: Building EXE from EXE-00.toc completed successfully.
+39450 INFO: Build complete! The results are available in: D:\my_python_project\python_toolbox\dist
