@@ -80,7 +80,7 @@ def _save_tasks_data(data: dict) -> None:
 
 _SIDE_CHARS = r"[ABC高低侧左右]"
 Y_PATTERN = re.compile(
-    rf"Y-(\d+)-(?:([ABC高低侧左右])(\d+)|(\d+)(?:-([ABC高低侧左右]))?)(?=-|\.|$)",
+    rf"Y-(\d+)-(?:([ABC高低侧左右])(\d+)|(\d+)(?:-([ABC高低侧左右]))?([ABC高低侧左右])?)(?=-|\.|$)",
     re.IGNORECASE,
 )
 
@@ -92,7 +92,12 @@ def _parse_y_match(match) -> tuple[str, str, str]:
         pid = str(int(match.group(3)))
     else:
         pid = str(int(match.group(4)))
-        side = match.group(5).upper() if match.group(5) else "-"
+        if match.group(5):
+            side = match.group(5).upper()
+        elif match.group(6):
+            side = match.group(6).upper()
+        else:
+            side = "-"
     return batch, pid, side
 T_PATTERN = re.compile(r"^T[-_]+([^-_]+)", re.IGNORECASE)
 T_SIDE_NUMBER_PATTERN = re.compile(r"([AB高低侧])\s*(\d+)", re.IGNORECASE)
