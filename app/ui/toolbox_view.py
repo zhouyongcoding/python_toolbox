@@ -289,7 +289,7 @@ def extract_query_identifier(raw: str) -> str | None:
         return raw
     m = Y_PATTERN.search(raw)
     if m:
-        return str(int(m.group(2)))
+        return _parse_y_match(m)[1]
     nums = re.findall(r"\d+", raw)
     if nums:
         nums.sort(key=len, reverse=True)
@@ -321,7 +321,7 @@ def find_images_by_identifier(folder_path: str, identifier: str) -> list[Path]:
         re.IGNORECASE,
     )
     y_pattern = re.compile(
-        rf"Y-\d+-(?:{_SIDE_CHARS})?0*{re.escape(normalized_identifier)}(?:-{_SIDE_CHARS})?(?=-|\.|$)",
+        rf"Y-\d+-(?:{_SIDE_CHARS})?0*{re.escape(normalized_identifier)}(?:-?{_SIDE_CHARS})?(?=-|\.|$)",
         re.IGNORECASE,
     )
     t_pattern = re.compile(
