@@ -373,7 +373,7 @@ def find_images_by_identifier(folder_path: str, identifier: str) -> list[Path]:
     return sorted(matches, key=lambda path: str(path).lower())
 
 
-def parse_export_key(path: Path) -> tuple[str, str, int] | None:
+def parse_export_key(path: Path) -> tuple[str, str, str, int] | None:
     stem = path.stem
     batch_m = _BATCH_RE.search(stem)
     if not batch_m:
@@ -383,21 +383,22 @@ def parse_export_key(path: Path) -> tuple[str, str, int] | None:
     if not id_info:
         return None
     pid, _ = id_info
+    side = _extract_side(stem)
     f_m = _F_RE.search(stem)
     f_num = int(f_m.group(1)) if f_m else 0
-    return (batch, pid, f_num)
+    return (batch, pid, side, f_num)
 
 
 def deduplicate_export_paths(paths: list[Path]) -> tuple[list[Path], int]:
-    groups: dict[tuple[str, str], tuple[int, Path]] = {}
+    groups: dict[tuple[str, str, str], tuple[int, Path]] = {}
     unknown: list[Path] = []
     for p in paths:
         key = parse_export_key(p)
         if key is None:
             unknown.append(p)
             continue
-        batch, pid, f_num = key
-        group_key = (batch, pid)
+        batch, pid, side, f_num = key
+        group_key = (batch, pid, side)
         if group_key not in groups or f_num > groups[group_key][0]:
             groups[group_key] = (f_num, p)
     kept = [item[1] for item in groups.values()] + unknown
