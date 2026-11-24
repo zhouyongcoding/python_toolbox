@@ -1,5 +1,5 @@
 
 [optparse.groups]Usage:[/]   
-  pip show \[options] <package> ...
+  pip.exe show \[options] <package> ...
 
 no such option: -n

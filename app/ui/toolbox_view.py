@@ -111,6 +111,12 @@ _SIDE_CHARS_SET = set(_SIDE_CHARS_STR)
 _RETAKE_SUFFIX_RE = re.compile(r"[-_\s]*R\d+(?=[-_]|$).*$", re.IGNORECASE)
 
 
+def _filename_says_ng(filename: str) -> bool:
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    stem_without_lng_retake = re.sub(r"LNG复拍", "", stem, flags=re.IGNORECASE)
+    return "NG" in stem_without_lng_retake.upper()
+
+
 def _clean_category(after_num: str) -> str:
     stripped = _RETAKE_SUFFIX_RE.sub("", after_num).strip("-_ \t")
     if not stripped or stripped[0].upper() != "L":
@@ -2021,8 +2027,7 @@ class ToolboxView(QWidget):
     def _is_ng_path(file_path: Path | str, root_path: Path | str | None = None) -> bool:
         path_str = str(file_path)
         name = os.path.basename(path_str)
-        name_without_ext = os.path.splitext(name)[0]
-        filename_says_ng = "NG" in name_without_ext.upper()
+        filename_says_ng = _filename_says_ng(name)
         if filename_says_ng:
             return True
         if root_path is not None:
@@ -2132,7 +2137,7 @@ class ToolboxView(QWidget):
                     for name in files:
                         full_path = os.path.join(root, name)
                         name_without_ext = os.path.splitext(name)[0]
-                        filename_says_ng = "NG" in name_without_ext.upper()
+                        filename_says_ng = _filename_says_ng(name)
                         is_ng = is_ng_folder or filename_says_ng
                         if filename_says_ng and not is_ng_folder:
                             stray_ng_filenames.append((parent_path, full_path))

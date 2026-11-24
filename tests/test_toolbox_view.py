@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.ui.toolbox_view import (
+    _filename_says_ng,
     extract_ng_defect_category_ids,
     extract_unique_scan_ids,
     filter_ng_defect_category_ids,
@@ -17,6 +18,19 @@ from app.ui.toolbox_view import (
     read_filenames_from_folder,
     scan_batch_category_tree,
 )
+
+
+class NgFilenameClassificationTests(unittest.TestCase):
+    def test_lng_retake_category_is_not_an_ng_marker(self):
+        self.assertFalse(
+            _filename_says_ng("T-20261113-高1-LNG复拍-R1.png")
+        )
+
+    def test_other_ng_markers_in_filename_remain_ng(self):
+        self.assertTrue(
+            _filename_says_ng("T-20261113-高1-LNG复拍-Result=NG.png")
+        )
+        self.assertTrue(_filename_says_ng("T-NO-A165-Result=NG.png"))
 
 
 class ScanIdentifierTests(unittest.TestCase):
